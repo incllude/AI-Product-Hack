@@ -678,3 +678,4 @@ def create_question_agent_langgraph(
 ) -> QuestionAgentLangGraph:
     """Создает экземпляр QuestionAgent на LangGraph (псевдоним для обратной совместимости)"""
     return create_question_agent(subject, difficulty, topic_context, theme_structure)
+

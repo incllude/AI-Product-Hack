@@ -1,6 +1,8 @@
 """
 Агент для оценки ответов студентов на LangGraph
 """
+# print("[EvaluationAgent] Модуль evaluation_agent.py загружается...")
+
 from typing import Dict, List, Optional, Any
 from langgraph.graph import StateGraph, END
 from langchain_core.prompts import PromptTemplate
@@ -17,6 +19,7 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
     """Агент для объективной изолированной оценки ответов на LangGraph"""
     
     def __init__(self, subject: str = "Общие знания", topic_context: str = None):
+        # print("[EvaluationAgent] __init__ вызван с subject:", subject)
         super().__init__(subject, topic_context)
         self.llm = create_yandex_llm()
         self.evaluation_history = []
@@ -29,6 +32,7 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
     
     def _setup_prompts(self):
         """Настройка промптов для оценки"""
+        # print("[EvaluationAgent] _setup_prompts вызван")
         
         # Основной промпт для оценки ответа
         self.evaluation_prompt = PromptTemplate(
@@ -96,6 +100,7 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
     
     def _create_evaluation_graph(self) -> StateGraph:
         """Создает граф состояний для оценки ответов"""
+        # print("[EvaluationAgent] _create_evaluation_graph вызван")
         graph = StateGraph(EvaluationState)
         
         # Добавляем узлы
@@ -136,6 +141,7 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
     
     def _validate_input_node(self, state: EvaluationState) -> EvaluationState:
         """Валидирует входные данные"""
+        # print("[EvaluationAgent] _validate_input_node вызван")
         try:
             # Проверяем обязательные поля
             if not state.get("question"):
@@ -159,6 +165,7 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
     
     def _decide_evaluation_path(self, state: EvaluationState) -> str:
         """Решает, какой путь использовать для оценки"""
+        # print("[EvaluationAgent] _decide_evaluation_path вызван")
         if state.get("error"):
             return "empty_answer"  # Fallback для ошибок
         
@@ -171,6 +178,7 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
     
     def _handle_empty_answer_node(self, state: EvaluationState) -> EvaluationState:
         """Обрабатывает случай пустого ответа"""
+        # print("[EvaluationAgent] _handle_empty_answer_node вызван")
         try:
             empty_result = {
                 'type': 'empty',
@@ -192,6 +200,7 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
     
     def _detailed_evaluation_node(self, state: EvaluationState) -> EvaluationState:
         """Выполняет детальную оценку ответа"""
+        # print("[EvaluationAgent] _detailed_evaluation_node вызван")
         try:
             chain = self.evaluation_prompt | self.llm | StrOutputParser()
             
@@ -204,7 +213,6 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
                 "topic_level": state.get("topic_level", "базовый")
             })
             
-            print(response["topic_context"])
             state["raw_evaluation"] = response
             state["evaluation_type"] = "detailed"
             self.log_operation("detailed_evaluation", state, response)
@@ -218,6 +226,7 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
     
     def _parse_evaluation_node(self, state: EvaluationState) -> EvaluationState:
         """Парсит результат оценки"""
+        # print("[EvaluationAgent] _parse_evaluation_node вызван")
         try:
             if state.get("error") or not state.get("raw_evaluation"):
                 return state
@@ -245,6 +254,7 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
     
     def _create_summary_node(self, state: EvaluationState) -> EvaluationState:
         """Создает сводку оценки БЕЗ текста ответа для передачи QuestionAgent"""
+        # print("[EvaluationAgent] _create_summary_node вызван")
         try:
             evaluation_result = state.get("evaluation_result")
             if not evaluation_result:
@@ -295,6 +305,7 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
     
     def _save_to_history_node(self, state: EvaluationState) -> EvaluationState:
         """Сохраняет результат в историю"""
+        # print("[EvaluationAgent] _save_to_history_node вызван")
         try:
             evaluation_result = state.get("evaluation_result")
             if evaluation_result and not state.get("error"):
@@ -320,6 +331,7 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
     
     def _parse_detailed_evaluation(self, response: str) -> Dict[str, Any]:
         """Парсит детальную оценку"""
+        # print("[EvaluationAgent] _parse_detailed_evaluation вызван")
         # Извлечение оценок по критериям
         correctness_match = re.search(r'ПРАВИЛЬНОСТЬ:\s*(\d+)/10\s*-\s*(.+?)(?=\n|$)', response)
         completeness_match = re.search(r'ПОЛНОТА:\s*(\d+)/10\s*-\s*(.+?)(?=\n|$)', response)
@@ -366,6 +378,7 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
     
     def _categorize_score(self, score: float) -> str:
         """Категоризирует числовую оценку в текстовое описание"""
+        # print("[EvaluationAgent] _categorize_score вызван с score:", score)
         if score >= 9:
             return "отлично"
         elif score >= 7:
@@ -381,6 +394,8 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
                        topic_level: str = "базовый", detailed: bool = True) -> Dict[str, Any]:
         """
         Оценивает ответ студента изолированно с использованием LangGraph
+        
+        # print("[EvaluationAgent] evaluate_answer вызван с вопросом:", question[:100] + "..." if len(question) > 100 else question)
         
         Args:
             question: Текст вопроса
@@ -435,6 +450,7 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
     
     def get_evaluation_statistics(self) -> Dict[str, Any]:
         """Возвращает статистику по оценкам"""
+        # print("[EvaluationAgent] get_evaluation_statistics вызван")
         if not self.evaluation_history:
             return {'message': 'Нет данных для анализа'}
         
@@ -459,11 +475,14 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
     
     def get_evaluation_history(self) -> List[Dict]:
         """Возвращает историю оценок"""
+        # print("[EvaluationAgent] get_evaluation_history вызван")
         return self.evaluation_history.copy()
     
     def get_evaluation_summaries_for_question_agent(self) -> List[Dict]:
         """
         Возвращает список сводок оценок БЕЗ текстов ответов для QuestionAgent
+        
+        # print("[EvaluationAgent] get_evaluation_summaries_for_question_agent вызван")
         
         Returns:
             Список характеристик оценок без приватной информации
@@ -483,6 +502,8 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
     def create_evaluation_summary(self, evaluation_result: Dict, question_data: Dict = None) -> Dict:
         """
         Создает сводку оценки БЕЗ текста ответа для передачи QuestionAgent
+        
+        # print("[EvaluationAgent] create_evaluation_summary вызван")
         
         Args:
             evaluation_result: Результат оценки от evaluate_answer
@@ -526,6 +547,7 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
     
     def reset_history(self):
         """Сбрасывает историю оценок"""
+        # print("[EvaluationAgent] reset_history вызван")
         self.evaluation_history = []
         super().reset_history()
 
@@ -536,6 +558,7 @@ def create_evaluation_agent(
     topic_context: str = None
 ) -> EvaluationAgentLangGraph:
     """Создает экземпляр EvaluationAgent на LangGraph"""
+    # print("[EvaluationAgent] create_evaluation_agent вызван")
     return EvaluationAgentLangGraph(
         subject=subject,
         topic_context=topic_context
@@ -547,4 +570,7 @@ def create_evaluation_agent_langgraph(
     topic_context: str = None
 ) -> EvaluationAgentLangGraph:
     """Создает экземпляр EvaluationAgent на LangGraph (псевдоним для обратной совместимости)"""
+    # print("[EvaluationAgent] create_evaluation_agent_langgraph вызван")
     return create_evaluation_agent(subject, topic_context)
+
+# print("[EvaluationAgent] Модуль evaluation_agent.py загружен успешно!")
