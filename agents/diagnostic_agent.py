@@ -1,31 +1,30 @@
 """
-Агент для диагностики и финальной оценки экзамена
+Агент для диагностики и финальной оценки экзамена на LangGraph
 """
-from typing import Dict, List, Optional, Tuple
-from langchain.schema import BaseMessage, HumanMessage, SystemMessage
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
-from yagpt_llm import YandexGPT
+from typing import Dict, List, Optional, Any
+from langgraph.graph import StateGraph, END
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+from base import LangGraphAgentBase, DiagnosticState
+from yagpt_llm import create_yandex_llm
 import json
 import re
 import statistics
+from datetime import datetime
 
 
-class DiagnosticAgent:
-    """Агент для комплексной диагностики результатов экзамена"""
+class DiagnosticAgentLangGraph(LangGraphAgentBase):
+    """Агент для комплексной диагностики результатов экзамена на LangGraph"""
     
     def __init__(self, subject: str = "Общие знания", topic_context: str = None):
-        """
-        Инициализация агента
-        
-        Args:
-            subject: Предмет экзамена
-            topic_context: Контекст конкретной темы экзамена
-        """
-        self.llm = YandexGPT()
-        self.subject = subject
-        self.topic_context = topic_context or f"Общий экзамен по предмету {subject}"
+        super().__init__(subject, topic_context)
+        self.llm = create_yandex_llm()
         self.diagnostic_history = []
+        
+        # Создаем граф состояний
+        self.graph = self._create_diagnostic_graph()
+        self.app = self.graph.compile()
         
         self._setup_prompts()
     
@@ -138,10 +137,408 @@ class DiagnosticAgent:
 """
         )
     
+    def _create_diagnostic_graph(self) -> StateGraph:
+        """Создает граф состояний для диагностики"""
+        graph = StateGraph(DiagnosticState)
+        
+        # Добавляем узлы
+        graph.add_node("validate_diagnostic_input", self._validate_diagnostic_input_node)
+        graph.add_node("prepare_analysis_data", self._prepare_analysis_data_node)
+        graph.add_node("analyze_patterns", self._analyze_patterns_node)
+        graph.add_node("calculate_statistics", self._calculate_statistics_node)
+        graph.add_node("determine_grade", self._determine_grade_node)
+        graph.add_node("generate_final_report", self._generate_final_report_node)
+        graph.add_node("extract_recommendations", self._extract_recommendations_node)
+        graph.add_node("identify_critical_areas", self._identify_critical_areas_node)
+        graph.add_node("create_diagnostic_result", self._create_diagnostic_result_node)
+        graph.add_node("save_diagnostic_history", self._save_diagnostic_history_node)
+        
+        # Определяем точку входа
+        graph.set_entry_point("validate_diagnostic_input")
+        
+        # Добавляем последовательные ребра
+        graph.add_edge("validate_diagnostic_input", "prepare_analysis_data")
+        graph.add_edge("prepare_analysis_data", "analyze_patterns")
+        graph.add_edge("analyze_patterns", "calculate_statistics")
+        graph.add_edge("calculate_statistics", "determine_grade")
+        graph.add_edge("determine_grade", "generate_final_report")
+        graph.add_edge("generate_final_report", "extract_recommendations")
+        graph.add_edge("extract_recommendations", "identify_critical_areas")
+        graph.add_edge("identify_critical_areas", "create_diagnostic_result")
+        graph.add_edge("create_diagnostic_result", "save_diagnostic_history")
+        
+        # Завершение
+        graph.add_edge("save_diagnostic_history", END)
+        
+        return graph
+    
+    def _validate_diagnostic_input_node(self, state: DiagnosticState) -> DiagnosticState:
+        """Валидирует входные данные для диагностики"""
+        try:
+            questions = state.get("questions", [])
+            evaluations = state.get("evaluations", [])
+            
+            if not questions or not evaluations:
+                state["error"] = 'Недостаточно данных для диагностики'
+                return state
+            
+            if len(questions) != len(evaluations):
+                state["error"] = 'Несоответствие количества вопросов и оценок'
+                return state
+            
+            self.log_operation("validate_diagnostic_input", state, "Validation passed")
+            return state
+            
+        except Exception as e:
+            state["error"] = f"Ошибка валидации входных данных: {str(e)}"
+            self.log_operation("validate_diagnostic_input", state, None, str(e))
+            return state
+    
+    def _prepare_analysis_data_node(self, state: DiagnosticState) -> DiagnosticState:
+        """Подготавливает данные для анализа"""
+        try:
+            if state.get("error"):
+                return state
+            
+            questions = state["questions"]
+            evaluations = state["evaluations"]
+            
+            analysis_text = ""
+            
+            for i, (question, evaluation) in enumerate(zip(questions, evaluations), 1):
+                analysis_text += f"\n--- ВОПРОС {i} ---\n"
+                analysis_text += f"Вопрос: {question.get('question', 'Не указан')}\n"
+                analysis_text += f"Уровень сложности: {question.get('topic_level', 'Не указан')}\n"
+                analysis_text += f"Ключевые моменты: {question.get('key_points', 'Не указаны')}\n"
+                
+                if evaluation.get('type') == 'detailed':
+                    eval_data = evaluation
+                    analysis_text += f"Итоговая оценка: {eval_data.get('total_score', 0)}/10\n"
+                    analysis_text += f"Оценки по критериям:\n"
+                    criteria = eval_data.get('criteria_scores', {})
+                    for criterion, score in criteria.items():
+                        analysis_text += f"  - {criterion}: {score}/10\n"
+                    analysis_text += f"Сильные стороны: {eval_data.get('strengths', '')}\n"
+                    analysis_text += f"Области улучшения: {eval_data.get('weaknesses', '')}\n"
+                else:
+                    analysis_text += f"Оценка: {evaluation.get('total_score', 0)}/10\n"
+                    analysis_text += f"Комментарий: {evaluation.get('comment', '')}\n"
+                
+                analysis_text += "\n"
+            
+            state["analysis_data"] = analysis_text
+            self.log_operation("prepare_analysis_data", len(questions), len(analysis_text))
+            return state
+            
+        except Exception as e:
+            state["error"] = f"Ошибка подготовки данных: {str(e)}"
+            self.log_operation("prepare_analysis_data", state, None, str(e))
+            return state
+    
+    def _analyze_patterns_node(self, state: DiagnosticState) -> DiagnosticState:
+        """Анализирует паттерны в ответах"""
+        try:
+            if state.get("error"):
+                return state
+            
+            analysis_data = state["analysis_data"]
+            questions = state["questions"]
+            
+            # Вычисление общей статистики для контекста
+            stats_text = f"Общее количество вопросов: {len(questions)}\n"
+            
+            chain = self.pattern_analysis_prompt | self.llm | StrOutputParser()
+            
+            pattern_analysis = chain.invoke({
+                "subject": self.subject,
+                "topic_context": self.topic_context,
+                "questions_and_evaluations": analysis_data,
+                "overall_stats": stats_text
+            })
+            
+            state["pattern_analysis"] = pattern_analysis
+            self.log_operation("analyze_patterns", analysis_data[:200], pattern_analysis[:200])
+            return state
+            
+        except Exception as e:
+            state["error"] = f"Ошибка анализа паттернов: {str(e)}"
+            self.log_operation("analyze_patterns", state, None, str(e))
+            return state
+    
+    def _calculate_statistics_node(self, state: DiagnosticState) -> DiagnosticState:
+        """Вычисляет статистики по оценкам"""
+        try:
+            if state.get("error"):
+                return state
+            
+            evaluations = state["evaluations"]
+            scores = []
+            detailed_scores = {'correctness': [], 'completeness': [], 'understanding': [], 'structure': []}
+            
+            for evaluation in evaluations:
+                score = evaluation.get('total_score', 0)
+                scores.append(score)
+                
+                # Детальные критерии (если доступны)
+                if evaluation.get('type') == 'detailed':
+                    criteria = evaluation.get('criteria_scores', {})
+                    for criterion, value in criteria.items():
+                        if criterion in detailed_scores:
+                            detailed_scores[criterion].append(value)
+            
+            total_score = sum(scores)
+            max_score = len(scores) * 10
+            average_score = total_score / len(scores) if scores else 0
+            
+            stats = {
+                'total_score': total_score,
+                'max_score': max_score,
+                'average_score': round(average_score, 2),
+                'percentage': round((total_score / max_score) * 100, 1) if max_score > 0 else 0,
+                'individual_scores': scores,
+                'highest_score': max(scores) if scores else 0,
+                'lowest_score': min(scores) if scores else 0
+            }
+            
+            # Добавление статистик по критериям
+            for criterion, criterion_scores in detailed_scores.items():
+                if criterion_scores:
+                    stats[f'{criterion}_average'] = round(sum(criterion_scores) / len(criterion_scores), 2)
+            
+            # Анализ распределения
+            if scores:
+                stats['score_distribution'] = {
+                    'excellent': len([s for s in scores if s >= 9]),
+                    'good': len([s for s in scores if 7 <= s < 9]),
+                    'satisfactory': len([s for s in scores if 5 <= s < 7]),
+                    'poor': len([s for s in scores if s < 5])
+                }
+                
+                # Тренд (если более 2 оценок)
+                if len(scores) >= 3:
+                    first_half = scores[:len(scores)//2]
+                    second_half = scores[len(scores)//2:]
+                    avg_first = sum(first_half) / len(first_half)
+                    avg_second = sum(second_half) / len(second_half)
+                    stats['trend'] = 'улучшение' if avg_second > avg_first else 'ухудшение' if avg_second < avg_first else 'стабильно'
+            
+            state["statistics"] = stats
+            self.log_operation("calculate_statistics", len(evaluations), stats)
+            return state
+            
+        except Exception as e:
+            state["error"] = f"Ошибка вычисления статистики: {str(e)}"
+            self.log_operation("calculate_statistics", state, None, str(e))
+            return state
+    
+    def _determine_grade_node(self, state: DiagnosticState) -> DiagnosticState:
+        """Определяет итоговую оценку"""
+        try:
+            if state.get("error"):
+                return state
+            
+            stats = state["statistics"]
+            total_score = stats['total_score']
+            max_score = stats['max_score']
+            
+            if max_score == 0:
+                grade_info = {'grade': 'неопределено', 'percentage': 0, 'description': 'Нет данных для оценки'}
+            else:
+                percentage = (total_score / max_score) * 100
+                
+                if percentage >= 90:
+                    grade = 'отлично'
+                    description = 'Выдающееся владение материалом'
+                elif percentage >= 75:
+                    grade = 'хорошо'
+                    description = 'Хорошее понимание предмета с небольшими пробелами'
+                elif percentage >= 60:
+                    grade = 'удовлетворительно'
+                    description = 'Базовое понимание предмета, требуется дополнительное изучение'
+                elif percentage >= 40:
+                    grade = 'неудовлетворительно'
+                    description = 'Серьезные пробелы в знаниях, требуется переподготовка'
+                else:
+                    grade = 'критически низко'
+                    description = 'Критически низкий уровень знаний, требуется полное переобучение'
+                
+                grade_info = {
+                    'grade': grade,
+                    'percentage': round(percentage, 1),
+                    'description': description,
+                    'points': f"{total_score}/{max_score}"
+                }
+            
+            state["grade_info"] = grade_info
+            self.log_operation("determine_grade", stats, grade_info)
+            return state
+            
+        except Exception as e:
+            state["error"] = f"Ошибка определения оценки: {str(e)}"
+            self.log_operation("determine_grade", state, None, str(e))
+            return state
+    
+    def _generate_final_report_node(self, state: DiagnosticState) -> DiagnosticState:
+        """Генерирует финальный отчет"""
+        try:
+            if state.get("error"):
+                return state
+            
+            pattern_analysis = state["pattern_analysis"]
+            stats = state["statistics"]
+            grade_info = state["grade_info"]
+            
+            chain = self.final_report_prompt | self.llm | StrOutputParser()
+            
+            final_report = chain.invoke({
+                "subject": self.subject,
+                "pattern_analysis": pattern_analysis,
+                "total_score": stats['total_score'],
+                "max_score": stats['max_score'],
+                "grade_recommendation": f"{grade_info['grade']} ({grade_info['percentage']}%)"
+            })
+            
+            state["final_report"] = final_report
+            self.log_operation("generate_final_report", pattern_analysis[:100], final_report[:200])
+            return state
+            
+        except Exception as e:
+            state["error"] = f"Ошибка генерации финального отчета: {str(e)}"
+            self.log_operation("generate_final_report", state, None, str(e))
+            return state
+    
+    def _extract_recommendations_node(self, state: DiagnosticState) -> DiagnosticState:
+        """Извлекает рекомендации из отчета"""
+        try:
+            if state.get("error"):
+                return state
+            
+            final_report = state["final_report"]
+            
+            # Ищем секцию рекомендаций
+            recommendations_section = re.search(r'=== РЕКОМЕНДАЦИИ ===(.+?)(?==== |$)', final_report, re.DOTALL)
+            
+            recommendations = []
+            if recommendations_section:
+                text = recommendations_section.group(1).strip()
+                # Разбиваем на отдельные рекомендации
+                lines = text.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if line and not line.startswith('===') and len(line) > 10:
+                        # Убираем маркеры списков
+                        clean_line = re.sub(r'^[-*•]\s*', '', line)
+                        clean_line = re.sub(r'^\d+\.\s*', '', clean_line)
+                        if clean_line:
+                            recommendations.append(clean_line)
+            
+            # Если не нашли структурированные рекомендации, создаем базовые
+            if not recommendations:
+                recommendations = [
+                    "Продолжить изучение основных концепций по теме",
+                    "Практиковаться в решении задач разного уровня сложности",
+                    "Обратить внимание на слабые места в понимании",
+                    "Повторить материал по ключевым темам",
+                    "Проконсультироваться с преподавателем по сложным вопросам"
+                ]
+            
+            state["recommendations"] = recommendations[:8]  # Ограничиваем количество
+            self.log_operation("extract_recommendations", final_report[:100], len(recommendations))
+            return state
+            
+        except Exception as e:
+            state["error"] = f"Ошибка извлечения рекомендаций: {str(e)}"
+            self.log_operation("extract_recommendations", state, None, str(e))
+            return state
+    
+    def _identify_critical_areas_node(self, state: DiagnosticState) -> DiagnosticState:
+        """Выявляет критические области для улучшения"""
+        try:
+            if state.get("error"):
+                return state
+            
+            analysis_data = state["analysis_data"]
+            critical_areas = []
+            
+            # Ищем паттерны низких оценок
+            low_score_pattern = re.findall(r'Итоговая оценка: ([0-4])/10', analysis_data)
+            if len(low_score_pattern) >= 2:
+                critical_areas.append("Критически низкие оценки по большинству вопросов")
+            
+            # Ищем повторяющиеся проблемы в областях улучшения
+            improvement_areas = re.findall(r'Области улучшения: (.+)', analysis_data)
+            common_words = {}
+            for area in improvement_areas:
+                words = area.lower().split()
+                for word in words:
+                    if len(word) > 4:  # Игнорируем короткие слова
+                        common_words[word] = common_words.get(word, 0) + 1
+            
+            # Добавляем часто упоминаемые проблемы
+            for word, count in common_words.items():
+                if count >= 2:
+                    critical_areas.append(f"Повторяющиеся проблемы с: {word}")
+            
+            if not critical_areas:
+                critical_areas.append("Критические области не выявлены")
+            
+            state["critical_areas"] = critical_areas[:5]  # Ограничиваем количество
+            self.log_operation("identify_critical_areas", analysis_data[:100], len(critical_areas))
+            return state
+            
+        except Exception as e:
+            state["error"] = f"Ошибка выявления критических областей: {str(e)}"
+            self.log_operation("identify_critical_areas", state, None, str(e))
+            return state
+    
+    def _create_diagnostic_result_node(self, state: DiagnosticState) -> DiagnosticState:
+        """Создает итоговый результат диагностики"""
+        try:
+            if state.get("error"):
+                return state
+            
+            diagnostic_result = {
+                'subject': self.subject,
+                'pattern_analysis': state["pattern_analysis"],
+                'statistics': state["statistics"],
+                'grade_info': state["grade_info"],
+                'final_report': state["final_report"],
+                'recommendations': state["recommendations"],
+                'critical_areas': state["critical_areas"],
+                'timestamp': datetime.now()
+            }
+            
+            state["diagnostic_result"] = diagnostic_result
+            self.log_operation("create_diagnostic_result", "All components", "Result created")
+            return state
+            
+        except Exception as e:
+            state["error"] = f"Ошибка создания результата диагностики: {str(e)}"
+            self.log_operation("create_diagnostic_result", state, None, str(e))
+            return state
+    
+    def _save_diagnostic_history_node(self, state: DiagnosticState) -> DiagnosticState:
+        """Сохраняет результат в историю диагностик"""
+        try:
+            if state.get("error"):
+                return state
+            
+            diagnostic_result = state["diagnostic_result"]
+            if diagnostic_result:
+                self.diagnostic_history.append(diagnostic_result)
+                self.log_operation("save_diagnostic_history", "Result saved", len(self.diagnostic_history))
+            
+            return state
+            
+        except Exception as e:
+            state["error"] = f"Ошибка сохранения в историю: {str(e)}"
+            self.log_operation("save_diagnostic_history", state, None, str(e))
+            return state
+    
     def diagnose_exam_results(self, questions: List[Dict], evaluations: List[Dict], 
-                            detailed_analysis: bool = True) -> Dict[str, any]:
+                            detailed_analysis: bool = True) -> Dict[str, Any]:
         """
-        Проводит комплексную диагностику результатов экзамена
+        Проводит комплексную диагностику результатов экзамена с использованием LangGraph
         
         Args:
             questions: Список вопросов с метаданными
@@ -151,291 +548,69 @@ class DiagnosticAgent:
         Returns:
             Диагностический отчет
         """
-        if not questions or not evaluations:
-            return {'error': 'Недостаточно данных для диагностики'}
-        
-        # Подготовка данных для анализа
-        analysis_data = self._prepare_analysis_data(questions, evaluations)
-        
-        # Анализ паттернов
-        pattern_analysis = self._analyze_patterns(analysis_data)
-        
-        # Вычисление статистик
-        stats = self._calculate_statistics(evaluations)
-        
-        # Определение оценки
-        grade_info = self._determine_grade(stats['total_score'], stats['max_score'])
-        
-        # Создание финального отчета
-        final_report = self._generate_final_report(
-            pattern_analysis, stats, grade_info
-        )
-        
-        diagnostic_result = {
-            'subject': self.subject,
-            'pattern_analysis': pattern_analysis,
-            'statistics': stats,
-            'grade_info': grade_info,
-            'final_report': final_report,
-            'recommendations': self._extract_recommendations(final_report),
-            'critical_areas': self._identify_critical_areas(analysis_data),
-            'timestamp': None  # Можно добавить datetime
-        }
-        
-        # Сохранение в историю
-        self.diagnostic_history.append(diagnostic_result)
-        
-        return diagnostic_result
-    
-    def _prepare_analysis_data(self, questions: List[Dict], evaluations: List[Dict]) -> str:
-        """Подготавливает данные для анализа"""
-        analysis_text = ""
-        
-        for i, (question, evaluation) in enumerate(zip(questions, evaluations), 1):
-            analysis_text += f"\n--- ВОПРОС {i} ---\n"
-            analysis_text += f"Вопрос: {question.get('question', 'Не указан')}\n"
-            analysis_text += f"Уровень сложности: {question.get('topic_level', 'Не указан')}\n"
-            analysis_text += f"Ключевые моменты: {question.get('key_points', 'Не указаны')}\n"
-            
-            if evaluation.get('type') == 'detailed':
-                eval_data = evaluation
-                analysis_text += f"Итоговая оценка: {eval_data.get('total_score', 0)}/10\n"
-                analysis_text += f"Оценки по критериям:\n"
-                criteria = eval_data.get('criteria_scores', {})
-                for criterion, score in criteria.items():
-                    analysis_text += f"  - {criterion}: {score}/10\n"
-                analysis_text += f"Сильные стороны: {eval_data.get('strengths', '')}\n"
-                analysis_text += f"Области улучшения: {eval_data.get('areas_for_improvement', '')}\n"
-            else:
-                analysis_text += f"Оценка: {evaluation.get('total_score', 0)}/10\n"
-                analysis_text += f"Комментарий: {evaluation.get('comment', '')}\n"
-            
-            analysis_text += "\n"
-        
-        return analysis_text
-    
-    def _analyze_patterns(self, analysis_data: str) -> str:
-        """Анализирует паттерны в ответах"""
-        # Вычисление общей статистики для контекста
-        stats_text = f"Общее количество вопросов: {len(analysis_data.split('--- ВОПРОС'))}\n"
-        
-        chain = LLMChain(llm=self.llm, prompt=self.pattern_analysis_prompt)
-        
-        return chain.run(
-            subject=self.subject,
-            topic_context=self.topic_context,
-            questions_and_evaluations=analysis_data,
-            overall_stats=stats_text
-        )
-    
-    def _calculate_statistics(self, evaluations: List[Dict]) -> Dict[str, any]:
-        """Вычисляет статистики по оценкам"""
-        scores = []
-        detailed_scores = {'correctness': [], 'completeness': [], 'understanding': [], 'structure': []}
-        
-        for evaluation in evaluations:
-            score = evaluation.get('total_score', 0)
-            scores.append(score)
-            
-            # Детальные критерии (если доступны)
-            if evaluation.get('type') == 'detailed':
-                criteria = evaluation.get('criteria_scores', {})
-                for criterion, value in criteria.items():
-                    if criterion in detailed_scores:
-                        detailed_scores[criterion].append(value)
-        
-        total_score = sum(scores)
-        max_score = len(scores) * 10
-        average_score = total_score / len(scores) if scores else 0
-        
-        stats = {
-            'total_score': total_score,
-            'max_score': max_score,
-            'average_score': round(average_score, 2),
-            'percentage': round((total_score / max_score) * 100, 1) if max_score > 0 else 0,
-            'individual_scores': scores,
-            'highest_score': max(scores) if scores else 0,
-            'lowest_score': min(scores) if scores else 0
-        }
-        
-        # Добавление статистик по критериям
-        for criterion, criterion_scores in detailed_scores.items():
-            if criterion_scores:
-                stats[f'{criterion}_average'] = round(sum(criterion_scores) / len(criterion_scores), 2)
-        
-        # Анализ распределения
-        if scores:
-            stats['score_distribution'] = {
-                'excellent': len([s for s in scores if s >= 9]),
-                'good': len([s for s in scores if 7 <= s < 9]),
-                'satisfactory': len([s for s in scores if 5 <= s < 7]),
-                'poor': len([s for s in scores if s < 5])
-            }
-            
-            # Тренд (если более 2 оценок)
-            if len(scores) >= 3:
-                first_half = scores[:len(scores)//2]
-                second_half = scores[len(scores)//2:]
-                avg_first = sum(first_half) / len(first_half)
-                avg_second = sum(second_half) / len(second_half)
-                stats['trend'] = 'улучшение' if avg_second > avg_first else 'ухудшение' if avg_second < avg_first else 'стабильно'
-        
-        return stats
-    
-    def _determine_grade(self, total_score: float, max_score: float) -> Dict[str, any]:
-        """Определяет итоговую оценку"""
-        if max_score == 0:
-            return {'grade': 'неопределено', 'percentage': 0, 'description': 'Нет данных для оценки'}
-        
-        percentage = (total_score / max_score) * 100
-        
-        if percentage >= 90:
-            grade = 'отлично'
-            description = 'Выдающееся владение материалом'
-        elif percentage >= 75:
-            grade = 'хорошо'
-            description = 'Хорошее понимание предмета с небольшими пробелами'
-        elif percentage >= 60:
-            grade = 'удовлетворительно'
-            description = 'Базовое понимание предмета, требуется дополнительное изучение'
-        elif percentage >= 40:
-            grade = 'неудовлетворительно'
-            description = 'Серьезные пробелы в знаниях, требуется переподготовка'
-        else:
-            grade = 'критически низко'
-            description = 'Критически низкий уровень знаний, требуется полное переобучение'
-        
-        return {
-            'grade': grade,
-            'percentage': round(percentage, 1),
-            'description': description,
-            'points': f"{total_score}/{max_score}"
-        }
-    
-    def _generate_final_report(self, pattern_analysis: str, stats: Dict, grade_info: Dict) -> str:
-        """Генерирует финальный отчет"""
-        chain = LLMChain(llm=self.llm, prompt=self.final_report_prompt)
-        
-        return chain.run(
-            subject=self.subject,
-            pattern_analysis=pattern_analysis,
-            total_score=stats['total_score'],
-            max_score=stats['max_score'],
-            grade_recommendation=f"{grade_info['grade']} ({grade_info['percentage']}%)"
-        )
-    
-    def _extract_recommendations(self, final_report: str) -> List[str]:
-        """Извлекает рекомендации из отчета"""
-        recommendations_section = re.search(r'=== РЕКОМЕНДАЦИИ ===\s*(.+?)(?===|\Z)', final_report, re.DOTALL)
-        
-        if not recommendations_section:
-            return ["Рекомендации не найдены в отчете"]
-        
-        recommendations_text = recommendations_section.group(1).strip()
-        
-        # Разбиваем на отдельные рекомендации
-        recommendations = []
-        for line in recommendations_text.split('\n'):
-            line = line.strip()
-            if line and not line.startswith('==='):
-                # Убираем маркеры списка
-                line = re.sub(r'^[-•*]\s*', '', line)
-                if line:
-                    recommendations.append(line)
-        
-        return recommendations[:10]  # Ограничиваем количество
-    
-    def _identify_critical_areas(self, analysis_data: str) -> List[str]:
-        """Выявляет критические области для улучшения"""
-        critical_areas = []
-        
-        # Ищем паттерны низких оценок
-        low_score_pattern = re.findall(r'Итоговая оценка: ([0-4])/10', analysis_data)
-        if len(low_score_pattern) >= 2:
-            critical_areas.append("Критически низкие оценки по большинству вопросов")
-        
-        # Ищем повторяющиеся проблемы в областях улучшения
-        improvement_areas = re.findall(r'Области улучшения: (.+)', analysis_data)
-        common_words = {}
-        for area in improvement_areas:
-            words = area.lower().split()
-            for word in words:
-                if len(word) > 4:  # Игнорируем короткие слова
-                    common_words[word] = common_words.get(word, 0) + 1
-        
-        # Добавляем часто упоминаемые проблемы
-        for word, count in common_words.items():
-            if count >= 2:
-                critical_areas.append(f"Повторяющиеся проблемы с: {word}")
-        
-        if not critical_areas:
-            critical_areas.append("Критические области не выявлены")
-        
-        return critical_areas[:5]  # Ограничиваем количество
-    
-    def _extract_recommendations(self, final_report: str) -> List[str]:
-        """Извлекает рекомендации из финального отчета"""
-        recommendations = []
-        
-        # Ищем секцию рекомендаций
-        recommendations_section = re.search(r'=== РЕКОМЕНДАЦИИ ===(.+?)(?==== |$)', final_report, re.DOTALL)
-        
-        if recommendations_section:
-            text = recommendations_section.group(1).strip()
-            # Разбиваем на отдельные рекомендации
-            lines = text.split('\n')
-            for line in lines:
-                line = line.strip()
-                if line and not line.startswith('===') and len(line) > 10:
-                    # Убираем маркеры списков
-                    clean_line = re.sub(r'^[-*•]\s*', '', line)
-                    clean_line = re.sub(r'^\d+\.\s*', '', clean_line)
-                    if clean_line:
-                        recommendations.append(clean_line)
-        
-        # Если не нашли структурированные рекомендации, создаем базовые
-        if not recommendations:
-            recommendations = [
-                "Продолжить изучение основных концепций по теме",
-                "Практиковаться в решении задач разного уровня сложности",
-                "Обратить внимание на слабые места в понимании",
-                "Повторить материал по ключевым темам",
-                "Проконсультироваться с преподавателем по сложным вопросам"
-            ]
-        
-        return recommendations[:8]  # Ограничиваем количество
-    
-    def compare_with_benchmark(self, current_results: Dict, benchmark_data: Dict = None) -> Dict[str, any]:
-        """Сравнивает результаты с эталонными данными"""
-        if not benchmark_data:
-            # Используем стандартные нормы
-            benchmark_data = {
-                'average_score': 7.0,
-                'excellence_threshold': 9.0,
-                'passing_threshold': 6.0,
-                'typical_distribution': {
-                    'excellent': 0.15,
-                    'good': 0.35,
-                    'satisfactory': 0.35,
-                    'poor': 0.15
-                }
-            }
-        
-        chain = LLMChain(llm=self.llm, prompt=self.comparative_analysis_prompt)
-        
-        comparison = chain.run(
-            current_results=str(current_results),
-            benchmark_data=str(benchmark_data)
-        )
-        
-        return {
-            'comparison_analysis': comparison,
-            'benchmark_data': benchmark_data,
-            'performance_level': self._determine_performance_level(
-                current_results.get('average_score', 0),
-                benchmark_data.get('average_score', 7.0)
+        try:
+            # Создаем начальное состояние
+            initial_state = DiagnosticState(
+                questions=questions,
+                evaluations=evaluations,
+                diagnostic_result=None,
+                error=None
             )
-        }
+            
+            # Запускаем граф
+            result = self.app.invoke(initial_state)
+            
+            # Проверяем результат
+            if result.get("error"):
+                return {'error': result["error"]}
+            
+            return result.get("diagnostic_result", {})
+            
+        except Exception as e:
+            error_msg = f"Критическая ошибка в diagnose_exam_results: {str(e)}"
+            self.log_operation("diagnose_exam_results", {
+                "questions_count": len(questions),
+                "evaluations_count": len(evaluations)
+            }, None, error_msg)
+            
+            return {'error': error_msg}
+    
+    def compare_with_benchmark(self, current_results: Dict, benchmark_data: Dict = None) -> Dict[str, Any]:
+        """Сравнивает результаты с эталонными данными"""
+        try:
+            if not benchmark_data:
+                # Используем стандартные нормы
+                benchmark_data = {
+                    'average_score': 7.0,
+                    'excellence_threshold': 9.0,
+                    'passing_threshold': 6.0,
+                    'typical_distribution': {
+                        'excellent': 0.15,
+                        'good': 0.35,
+                        'satisfactory': 0.35,
+                        'poor': 0.15
+                    }
+                }
+            
+            chain = self.comparative_analysis_prompt | self.llm | StrOutputParser()
+            
+            comparison = chain.invoke({
+                "current_results": str(current_results),
+                "benchmark_data": str(benchmark_data)
+            })
+            
+            return {
+                'comparison_analysis': comparison,
+                'benchmark_data': benchmark_data,
+                'performance_level': self._determine_performance_level(
+                    current_results.get('average_score', 0),
+                    benchmark_data.get('average_score', 7.0)
+                )
+            }
+            
+        except Exception as e:
+            self.log_operation("compare_with_benchmark", current_results, None, str(e))
+            return {'error': f"Ошибка сравнения с эталоном: {str(e)}"}
     
     def _determine_performance_level(self, student_avg: float, benchmark_avg: float) -> str:
         """Определяет уровень успеваемости относительно эталона"""
@@ -456,21 +631,47 @@ class DiagnosticAgent:
         """Возвращает историю диагностик"""
         return self.diagnostic_history.copy()
     
-    def generate_learning_roadmap(self, diagnostic_result: Dict) -> Dict[str, any]:
+    def generate_learning_roadmap(self, diagnostic_result: Dict) -> Dict[str, Any]:
         """Генерирует дорожную карту обучения"""
-        recommendations = diagnostic_result.get('recommendations', [])
-        critical_areas = diagnostic_result.get('critical_areas', [])
-        
-        # Простая дорожная карта на основе рекомендаций
-        roadmap = {
-            'immediate_actions': critical_areas[:3],
-            'short_term_goals': recommendations[:3],
-            'medium_term_goals': recommendations[3:6] if len(recommendations) > 3 else [],
-            'long_term_goals': recommendations[6:] if len(recommendations) > 6 else []
-        }
-        
-        return roadmap
+        try:
+            recommendations = diagnostic_result.get('recommendations', [])
+            critical_areas = diagnostic_result.get('critical_areas', [])
+            
+            # Простая дорожная карта на основе рекомендаций
+            roadmap = {
+                'immediate_actions': critical_areas[:3],
+                'short_term_goals': recommendations[:3],
+                'medium_term_goals': recommendations[3:6] if len(recommendations) > 3 else [],
+                'long_term_goals': recommendations[6:] if len(recommendations) > 6 else []
+            }
+            
+            return roadmap
+            
+        except Exception as e:
+            self.log_operation("generate_learning_roadmap", diagnostic_result, None, str(e))
+            return {'error': f"Ошибка создания дорожной карты: {str(e)}"}
     
     def reset_history(self):
         """Сбрасывает историю диагностик"""
         self.diagnostic_history = []
+        super().reset_history()
+
+
+# Функция для создания DiagnosticAgent на LangGraph
+def create_diagnostic_agent(
+    subject: str = "Общие знания",
+    topic_context: str = None
+) -> DiagnosticAgentLangGraph:
+    """Создает экземпляр DiagnosticAgent на LangGraph"""
+    return DiagnosticAgentLangGraph(
+        subject=subject,
+        topic_context=topic_context
+    )
+
+# Псевдоним для обратной совместимости
+def create_diagnostic_agent_langgraph(
+    subject: str = "Общие знания",
+    topic_context: str = None
+) -> DiagnosticAgentLangGraph:
+    """Создает экземпляр DiagnosticAgent на LangGraph (псевдоним для обратной совместимости)"""
+    return create_diagnostic_agent(subject, topic_context)

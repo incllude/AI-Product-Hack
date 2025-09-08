@@ -1,29 +1,25 @@
 """
-Агент для создания тематической структуры экзамена на основе таксономии Блума
+Агент для создания тематической структуры экзамена на основе таксономии Блума на LangGraph
 """
-from typing import Dict, List, Optional, Tuple
-from langchain.schema import BaseMessage, HumanMessage, SystemMessage
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
-from yagpt_llm import YandexGPT
+from typing import Dict, List, Optional, Any
+from langgraph.graph import StateGraph, END
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+from base import LangGraphAgentBase, ThemeState
+from yagpt_llm import create_yandex_llm
 import json
 import re
+from datetime import datetime
 
 
-class ThemeAgent:
-    """Агент для создания тематической структуры экзамена с руководящими принципами для QuestionAgent"""
+class ThemeAgentLangGraph(LangGraphAgentBase):
+    """Агент для создания тематической структуры экзамена с руководящими принципами для QuestionAgent на LangGraph"""
     
     def __init__(self, subject: str = "Общие знания", topic_context: str = None):
-        """
-        Инициализация агента
-        
-        Args:
-            subject: Предмет экзамена
-            topic_context: Контекст конкретной темы экзамена
-        """
-        self.llm = YandexGPT()
-        self.subject = subject
-        self.topic_context = topic_context or f"Общий экзамен по предмету {subject}"
+        super().__init__(subject, topic_context)
+        self.llm = create_yandex_llm()
+        self.generated_structures = []
         
         # Структура таксономии Блума (пересмотренная версия)
         self.bloom_levels = {
@@ -71,7 +67,10 @@ class ThemeAgent:
             }
         }
         
-        self.generated_structures = []
+        # Создаем граф состояний
+        self.graph = self._create_theme_graph()
+        self.app = self.graph.compile()
+        
         self._setup_prompts()
     
     def _setup_prompts(self):
@@ -184,132 +183,265 @@ class ThemeAgent:
 """
         )
     
-    def generate_theme_structure(self, total_questions: int = 10, difficulty: str = "средний") -> Dict[str, any]:
-        """
-        Генерирует тематическую структуру экзамена с руководящими принципами
+    def _create_theme_graph(self) -> StateGraph:
+        """Создает граф состояний для создания тематической структуры"""
+        graph = StateGraph(ThemeState)
         
-        Args:
-            total_questions: Общее количество вопросов
-            difficulty: Уровень сложности экзамена
-            
-        Returns:
-            Тематическая структура с принципами для QuestionAgent
-        """
-        # Формирование информации об уровнях Блума
-        bloom_info = self._format_bloom_levels_info()
+        # Добавляем узлы
+        graph.add_node("validate_theme_input", self._validate_theme_input_node)
+        graph.add_node("format_bloom_levels", self._format_bloom_levels_node)
+        graph.add_node("analyze_theme", self._analyze_theme_node)
+        graph.add_node("distribute_questions", self._distribute_questions_node)
+        graph.add_node("create_question_guidelines", self._create_question_guidelines_node)
+        graph.add_node("build_theme_curriculum", self._build_theme_curriculum_node)
+        graph.add_node("validate_theme_structure", self._validate_theme_structure_node)
+        graph.add_node("save_theme_structure", self._save_theme_structure_node)
         
-        # Анализ темы и создание общей структуры
-        theme_structure = self._analyze_theme_and_create_structure(bloom_info)
+        # Определяем точку входа
+        graph.set_entry_point("validate_theme_input")
         
-        # Распределение вопросов по уровням
-        questions_distribution = self._distribute_questions(total_questions)
+        # Добавляем последовательные ребра
+        graph.add_edge("validate_theme_input", "format_bloom_levels")
+        graph.add_edge("format_bloom_levels", "analyze_theme")
+        graph.add_edge("analyze_theme", "distribute_questions")
+        graph.add_edge("distribute_questions", "create_question_guidelines")
+        graph.add_edge("create_question_guidelines", "build_theme_curriculum")
+        graph.add_edge("build_theme_curriculum", "validate_theme_structure")
+        graph.add_edge("validate_theme_structure", "save_theme_structure")
         
-        # Создание руководящих принципов для каждого уровня
-        question_guidelines = self._create_question_guidelines(questions_distribution, theme_structure)
+        # Завершение
+        graph.add_edge("save_theme_structure", END)
         
-        # Создание итоговой структуры
-        theme_curriculum = {
-            'curriculum_id': self._generate_curriculum_id(),
-            'subject': self.subject,
-            'topic_context': self.topic_context,
-            'total_questions': total_questions,
-            'difficulty': difficulty,
-            'theme_structure': theme_structure,
-            'questions_distribution': questions_distribution,
-            'question_guidelines': question_guidelines,
-            'bloom_sequence': self._create_bloom_sequence(),
-            'assessment_framework': self._create_assessment_framework(),
-            'metadata': {
-                'created_at': None,  # Можно добавить datetime
-                'bloom_coverage': self._calculate_bloom_coverage(questions_distribution),
-                'estimated_duration': self._estimate_duration(questions_distribution)
-            }
-        }
-        
-        # Сохранение в историю
-        self.generated_structures.append(theme_curriculum)
-        
-        return theme_curriculum
+        return graph
     
-    def _format_bloom_levels_info(self) -> str:
+    def _validate_theme_input_node(self, state: ThemeState) -> ThemeState:
+        """Валидирует входные данные для создания тематической структуры"""
+        try:
+            if not state.get("subject"):
+                state["error"] = "Отсутствует предмет"
+                return state
+            
+            if not state.get("topic_context"):
+                state["error"] = "Отсутствует контекст темы"
+                return state
+            
+            if state.get("total_questions", 0) <= 0:
+                state["error"] = "Некорректное количество вопросов"
+                return state
+            
+            self.log_operation("validate_theme_input", state, "Validation passed")
+            return state
+            
+        except Exception as e:
+            state["error"] = f"Ошибка валидации входных данных: {str(e)}"
+            self.log_operation("validate_theme_input", state, None, str(e))
+            return state
+    
+    def _format_bloom_levels_node(self, state: ThemeState) -> ThemeState:
         """Форматирует информацию об уровнях Блума для промпта"""
-        info = ""
-        for level, data in self.bloom_levels.items():
-            info += f"\n{data['name'].upper()} ({level}):\n"
-            info += f"Описание: {data['description']}\n"
-            info += f"Действия: {', '.join(data['verbs'])}\n"
-            info += f"Типы вопросов: {', '.join(data['question_types'])}\n"
-            info += f"Доля от экзамена: {int(data['weight']*100)}%\n"
-        return info
-    
-    def _analyze_theme_and_create_structure(self, bloom_info: str) -> str:
-        """Анализирует тему и создает структуру обучения"""
-        chain = LLMChain(llm=self.llm, prompt=self.theme_analysis_prompt)
-        
-        return chain.run(
-            topic_context=self.topic_context,
-            bloom_levels_info=bloom_info
-        )
-    
-    def _distribute_questions(self, total_questions: int) -> Dict[str, int]:
-        """Распределяет вопросы по уровням Блума согласно весам"""
-        distribution = {}
-        
-        for level, data in self.bloom_levels.items():
-            count = max(1, round(total_questions * data['weight']))
-            distribution[level] = count
-        
-        # Корректировка для точного соответствия общему количеству
-        current_total = sum(distribution.values())
-        if current_total != total_questions:
-            # Добавляем или убираем вопросы с наиболее важных уровней
-            diff = total_questions - current_total
-            priority_levels = ['understand', 'apply', 'analyze']
+        try:
+            if state.get("error"):
+                return state
             
-            for level in priority_levels:
-                if diff == 0:
-                    break
-                if diff > 0:
-                    distribution[level] += 1
-                    diff -= 1
-                elif diff < 0 and distribution[level] > 1:
-                    distribution[level] -= 1
-                    diff += 1
-        
-        return distribution
+            info = ""
+            for level, data in self.bloom_levels.items():
+                info += f"\n{data['name'].upper()} ({level}):\n"
+                info += f"Описание: {data['description']}\n"
+                info += f"Действия: {', '.join(data['verbs'])}\n"
+                info += f"Типы вопросов: {', '.join(data['question_types'])}\n"
+                info += f"Доля от экзамена: {int(data['weight']*100)}%\n"
+            
+            state["bloom_levels_info"] = info
+            self.log_operation("format_bloom_levels", len(self.bloom_levels), len(info))
+            return state
+            
+        except Exception as e:
+            state["error"] = f"Ошибка форматирования уровней Блума: {str(e)}"
+            self.log_operation("format_bloom_levels", state, None, str(e))
+            return state
     
-    def _create_question_guidelines(self, distribution: Dict[str, int], theme_structure: str) -> Dict[str, Dict]:
+    def _analyze_theme_node(self, state: ThemeState) -> ThemeState:
+        """Анализирует тему и создает структуру обучения"""
+        try:
+            if state.get("error"):
+                return state
+            
+            chain = self.theme_analysis_prompt | self.llm | StrOutputParser()
+            
+            theme_structure = chain.invoke({
+                "topic_context": state["topic_context"],
+                "bloom_levels_info": state["bloom_levels_info"]
+            })
+            
+            state["raw_theme_structure"] = theme_structure
+            self.log_operation("analyze_theme", state["topic_context"][:100], theme_structure[:200])
+            return state
+            
+        except Exception as e:
+            state["error"] = f"Ошибка анализа темы: {str(e)}"
+            self.log_operation("analyze_theme", state, None, str(e))
+            return state
+    
+    def _distribute_questions_node(self, state: ThemeState) -> ThemeState:
+        """Распределяет вопросы по уровням Блума согласно весам"""
+        try:
+            if state.get("error"):
+                return state
+            
+            total_questions = state["total_questions"]
+            distribution = {}
+            
+            for level, data in self.bloom_levels.items():
+                count = max(1, round(total_questions * data['weight']))
+                distribution[level] = count
+            
+            # Корректировка для точного соответствия общему количеству
+            current_total = sum(distribution.values())
+            if current_total != total_questions:
+                # Добавляем или убираем вопросы с наиболее важных уровней
+                diff = total_questions - current_total
+                priority_levels = ['understand', 'apply', 'analyze']
+                
+                for level in priority_levels:
+                    if diff == 0:
+                        break
+                    if diff > 0:
+                        distribution[level] += 1
+                        diff -= 1
+                    elif diff < 0 and distribution[level] > 1:
+                        distribution[level] -= 1
+                        diff += 1
+            
+            state["questions_distribution"] = distribution
+            self.log_operation("distribute_questions", total_questions, distribution)
+            return state
+            
+        except Exception as e:
+            state["error"] = f"Ошибка распределения вопросов: {str(e)}"
+            self.log_operation("distribute_questions", state, None, str(e))
+            return state
+    
+    def _create_question_guidelines_node(self, state: ThemeState) -> ThemeState:
         """Создает руководящие принципы для QuestionAgent по каждому уровню Блума"""
-        guidelines = {}
-        
-        # Извлекаем структуру каждого уровня из общей структуры темы
-        level_structures = self._parse_theme_structure(theme_structure)
-        
-        for level, count in distribution.items():
-            if count > 0:
-                level_structure = level_structures.get(level, f"Структура для уровня {level}")
-                
-                chain = LLMChain(llm=self.llm, prompt=self.question_guidelines_prompt)
-                
-                response = chain.run(
-                    topic_context=self.topic_context,
-                    bloom_level=self.bloom_levels[level]['name'],
-                    level_structure=level_structure,
-                    question_count=count
-                )
-                
-                # Парсим и структурируем руководящие принципы
-                parsed_guidelines = self._parse_question_guidelines(response)
-                
-                guidelines[level] = {
-                    'bloom_level': level,
-                    'level_name': self.bloom_levels[level]['name'],
-                    'question_count': count,
-                    'guidelines': parsed_guidelines,
-                    'raw_response': response
+        try:
+            if state.get("error"):
+                return state
+            
+            distribution = state["questions_distribution"]
+            raw_theme_structure = state["raw_theme_structure"]
+            
+            # Извлекаем структуру каждого уровня из общей структуры темы
+            level_structures = self._parse_theme_structure(raw_theme_structure)
+            
+            guidelines = {}
+            
+            for level, count in distribution.items():
+                if count > 0:
+                    level_structure = level_structures.get(level, f"Структура для уровня {level}")
+                    
+                    chain = self.question_guidelines_prompt | self.llm | StrOutputParser()
+                    
+                    response = chain.invoke({
+                        "topic_context": state["topic_context"],
+                        "bloom_level": self.bloom_levels[level]['name'],
+                        "level_structure": level_structure,
+                        "question_count": count
+                    })
+                    
+                    # Парсим и структурируем руководящие принципы
+                    parsed_guidelines = self._parse_question_guidelines(response)
+                    
+                    guidelines[level] = {
+                        'bloom_level': level,
+                        'level_name': self.bloom_levels[level]['name'],
+                        'question_count': count,
+                        'guidelines': parsed_guidelines,
+                        'raw_response': response
+                    }
+            
+            state["question_guidelines"] = guidelines
+            self.log_operation("create_question_guidelines", len(distribution), len(guidelines))
+            return state
+            
+        except Exception as e:
+            state["error"] = f"Ошибка создания руководящих принципов: {str(e)}"
+            self.log_operation("create_question_guidelines", state, None, str(e))
+            return state
+    
+    def _build_theme_curriculum_node(self, state: ThemeState) -> ThemeState:
+        """Строит итоговую тематическую структуру"""
+        try:
+            if state.get("error"):
+                return state
+            
+            curriculum_id = self._generate_curriculum_id()
+            
+            theme_curriculum = {
+                'curriculum_id': curriculum_id,
+                'subject': state["subject"],
+                'topic_context': state["topic_context"],
+                'total_questions': state["total_questions"],
+                'difficulty': state["difficulty"],
+                'theme_structure': state["raw_theme_structure"],
+                'questions_distribution': state["questions_distribution"],
+                'question_guidelines': state["question_guidelines"],
+                'bloom_sequence': self._create_bloom_sequence(),
+                'assessment_framework': self._create_assessment_framework(),
+                'metadata': {
+                    'created_at': datetime.now(),
+                    'bloom_coverage': self._calculate_bloom_coverage(state["questions_distribution"]),
+                    'estimated_duration': self._estimate_duration(state["questions_distribution"])
                 }
-        
-        return guidelines
+            }
+            
+            state["theme_structure"] = theme_curriculum
+            self.log_operation("build_theme_curriculum", curriculum_id, "Curriculum built")
+            return state
+            
+        except Exception as e:
+            state["error"] = f"Ошибка построения тематической структуры: {str(e)}"
+            self.log_operation("build_theme_curriculum", state, None, str(e))
+            return state
+    
+    def _validate_theme_structure_node(self, state: ThemeState) -> ThemeState:
+        """Валидирует созданную тематическую структуру"""
+        try:
+            if state.get("error"):
+                return state
+            
+            theme_structure = state["theme_structure"]
+            validation_result = self._validate_structure(theme_structure)
+            
+            state["validation_result"] = validation_result
+            
+            if not validation_result.get("is_valid"):
+                state["error"] = f"Структура не прошла валидацию: {validation_result.get('issues', [])}"
+            
+            self.log_operation("validate_theme_structure", "Structure validated", validation_result)
+            return state
+            
+        except Exception as e:
+            state["error"] = f"Ошибка валидации тематической структуры: {str(e)}"
+            self.log_operation("validate_theme_structure", state, None, str(e))
+            return state
+    
+    def _save_theme_structure_node(self, state: ThemeState) -> ThemeState:
+        """Сохраняет тематическую структуру в историю"""
+        try:
+            if state.get("error"):
+                return state
+            
+            theme_structure = state["theme_structure"]
+            if theme_structure:
+                self.generated_structures.append(theme_structure)
+                self.log_operation("save_theme_structure", "Structure saved", len(self.generated_structures))
+            
+            return state
+            
+        except Exception as e:
+            state["error"] = f"Ошибка сохранения тематической структуры: {str(e)}"
+            self.log_operation("save_theme_structure", state, None, str(e))
+            return state
     
     def _parse_theme_structure(self, theme_structure: str) -> Dict[str, str]:
         """Парсит структуру темы по уровням"""
@@ -389,7 +521,6 @@ class ThemeAgent:
     
     def _estimate_duration(self, distribution: Dict[str, int]) -> int:
         """Оценивает общую продолжительность экзамена в минутах (приблизительно)"""
-        # Поскольку таймеры убраны, оценка основана на сложности уровней Блума
         # Базовое приблизительное время для каждого уровня Блума
         level_time = {
             'remember': 3,      # простые вопросы на память
@@ -407,15 +538,105 @@ class ThemeAgent:
         # Добавляем время на инструктаж и переходы
         total_time += 10
         
-        # Примечание: это только ориентировочная оценка, так как таймеры не используются
         return total_time
     
     def _generate_curriculum_id(self) -> str:
         """Генерирует уникальный ID для программы"""
-        import datetime
-        return f"theme_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        return f"theme_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     
-    def get_question_requirements_for_level(self, curriculum: Dict[str, any], bloom_level: str) -> Dict[str, any]:
+    def _validate_structure(self, curriculum: Dict[str, Any]) -> Dict[str, Any]:
+        """Валидирует тематическую структуру экзамена"""
+        issues = []
+        warnings = []
+        
+        # Проверка наличия всех уровней Блума
+        question_guidelines = curriculum.get('question_guidelines', {})
+        missing_levels = set(self.bloom_levels.keys()) - set(question_guidelines.keys())
+        
+        if missing_levels:
+            issues.append(f"Отсутствуют уровни Блума: {', '.join(missing_levels)}")
+        
+        # Проверка руководящих принципов
+        for level, guidelines in question_guidelines.items():
+            if not guidelines.get('guidelines', {}).get('formulation_principles'):
+                warnings.append(f"Отсутствуют принципы формулирования для уровня {level}")
+        
+        # Проверка баланса вопросов
+        distribution = curriculum.get('questions_distribution', {})
+        total_questions = sum(distribution.values())
+        
+        if total_questions != curriculum.get('total_questions', 0):
+            issues.append("Несоответствие общего количества вопросов и распределения")
+        
+        # Проверка временных рамок
+        estimated_duration = curriculum.get('metadata', {}).get('estimated_duration', 0)
+        if estimated_duration > 180:  # более 3 часов
+            warnings.append("Экзамен может быть слишком длинным (>3 часов)")
+        
+        return {
+            'is_valid': len(issues) == 0,
+            'issues': issues,
+            'warnings': warnings,
+            'recommendations': self._generate_validation_recommendations(issues, warnings)
+        }
+    
+    def _generate_validation_recommendations(self, issues: List[str], warnings: List[str]) -> List[str]:
+        """Генерирует рекомендации на основе проблем валидации"""
+        recommendations = []
+        
+        if issues:
+            recommendations.append("Исправьте критические ошибки перед использованием структуры")
+        
+        if warnings:
+            recommendations.append("Рассмотрите предупреждения для улучшения качества экзамена")
+        
+        if not issues and not warnings:
+            recommendations.append("Тематическая структура готова к использованию с QuestionAgent")
+        
+        return recommendations
+    
+    def generate_theme_structure(self, total_questions: int = 10, difficulty: str = "средний") -> Dict[str, Any]:
+        """
+        Генерирует тематическую структуру экзамена с руководящими принципами с использованием LangGraph
+        
+        Args:
+            total_questions: Общее количество вопросов
+            difficulty: Уровень сложности экзамена
+            
+        Returns:
+            Тематическая структура с принципами для QuestionAgent
+        """
+        try:
+            # Создаем начальное состояние
+            initial_state = ThemeState(
+                subject=self.subject,
+                topic_context=self.topic_context,
+                total_questions=total_questions,
+                difficulty=difficulty,
+                theme_structure=None,
+                validation_result=None,
+                error=None
+            )
+            
+            # Запускаем граф
+            result = self.app.invoke(initial_state)
+            
+            # Проверяем результат
+            if result.get("error"):
+                return {'error': result["error"]}
+            
+            return result.get("theme_structure", {})
+            
+        except Exception as e:
+            error_msg = f"Критическая ошибка в generate_theme_structure: {str(e)}"
+            self.log_operation("generate_theme_structure", {
+                "total_questions": total_questions,
+                "difficulty": difficulty
+            }, None, error_msg)
+            
+            return {'error': error_msg}
+    
+    def get_question_requirements_for_level(self, curriculum: Dict[str, Any], bloom_level: str) -> Dict[str, Any]:
         """
         Возвращает требования к вопросам для конкретного уровня Блума
         
@@ -447,7 +668,7 @@ class ThemeAgent:
             'format_requirements': guidelines.get('guidelines', {}).get('format_requirements')
         }
     
-    def get_next_bloom_level_requirements(self, curriculum: Dict[str, any], current_position: int) -> Optional[Dict]:
+    def get_next_bloom_level_requirements(self, curriculum: Dict[str, Any], current_position: int) -> Optional[Dict]:
         """
         Возвращает требования для следующего вопроса согласно последовательности Блума
         
@@ -473,7 +694,7 @@ class ThemeAgent:
         
         return None  # Экзамен завершен
     
-    def generate_summary_report(self, curriculum: Dict[str, any]) -> str:
+    def generate_summary_report(self, curriculum: Dict[str, Any]) -> str:
         """
         Генерирует итоговый отчет о тематической структуре экзамена
         
@@ -523,11 +744,11 @@ class ThemeAgent:
         """Возвращает историю созданных структур"""
         return self.generated_structures.copy()
     
-    def export_structure_to_json(self, curriculum: Dict[str, any]) -> str:
+    def export_structure_to_json(self, curriculum: Dict[str, Any]) -> str:
         """Экспортирует тематическую структуру в JSON формат"""
-        return json.dumps(curriculum, ensure_ascii=False, indent=2)
+        return json.dumps(curriculum, ensure_ascii=False, indent=2, default=str)
     
-    def validate_theme_structure(self, curriculum: Dict[str, any]) -> Dict[str, any]:
+    def validate_theme_structure(self, curriculum: Dict[str, Any]) -> Dict[str, Any]:
         """
         Валидирует тематическую структуру экзамена
         
@@ -537,51 +758,29 @@ class ThemeAgent:
         Returns:
             Результат валидации
         """
-        issues = []
-        warnings = []
-        
-        # Проверка наличия всех уровней Блума
-        question_guidelines = curriculum.get('question_guidelines', {})
-        missing_levels = set(self.bloom_levels.keys()) - set(question_guidelines.keys())
-        
-        if missing_levels:
-            issues.append(f"Отсутствуют уровни Блума: {', '.join(missing_levels)}")
-        
-        # Проверка руководящих принципов
-        for level, guidelines in question_guidelines.items():
-            if not guidelines.get('guidelines', {}).get('formulation_principles'):
-                warnings.append(f"Отсутствуют принципы формулирования для уровня {level}")
-        
-        # Проверка баланса вопросов
-        distribution = curriculum.get('questions_distribution', {})
-        total_questions = sum(distribution.values())
-        
-        if total_questions != curriculum.get('total_questions', 0):
-            issues.append("Несоответствие общего количества вопросов и распределения")
-        
-        # Проверка временных рамок
-        estimated_duration = curriculum.get('metadata', {}).get('estimated_duration', 0)
-        if estimated_duration > 180:  # более 3 часов
-            warnings.append("Экзамен может быть слишком длинным (>3 часов)")
-        
-        return {
-            'is_valid': len(issues) == 0,
-            'issues': issues,
-            'warnings': warnings,
-            'recommendations': self._generate_validation_recommendations(issues, warnings)
-        }
+        return self._validate_structure(curriculum)
     
-    def _generate_validation_recommendations(self, issues: List[str], warnings: List[str]) -> List[str]:
-        """Генерирует рекомендации на основе проблем валидации"""
-        recommendations = []
-        
-        if issues:
-            recommendations.append("Исправьте критические ошибки перед использованием структуры")
-        
-        if warnings:
-            recommendations.append("Рассмотрите предупреждения для улучшения качества экзамена")
-        
-        if not issues and not warnings:
-            recommendations.append("Тематическая структура готова к использованию с QuestionAgent")
-        
-        return recommendations
+    def reset_history(self):
+        """Сбрасывает историю созданных структур"""
+        self.generated_structures = []
+        super().reset_history()
+
+
+# Функция для создания ThemeAgent на LangGraph
+def create_theme_agent(
+    subject: str = "Общие знания",
+    topic_context: str = None
+) -> ThemeAgentLangGraph:
+    """Создает экземпляр ThemeAgent на LangGraph"""
+    return ThemeAgentLangGraph(
+        subject=subject,
+        topic_context=topic_context
+    )
+
+# Псевдоним для обратной совместимости
+def create_theme_agent_langgraph(
+    subject: str = "Общие знания",
+    topic_context: str = None
+) -> ThemeAgentLangGraph:
+    """Создает экземпляр ThemeAgent на LangGraph (псевдоним для обратной совместимости)"""
+    return create_theme_agent(subject, topic_context)
