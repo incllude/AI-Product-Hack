@@ -1,6 +1,6 @@
 """
 Интеграция с YandexGPT API для LangGraph
-Обновленная версия с улучшенной поддержкой LangGraph
+Обновленная версия с YandexCloudML SDK и асинхронными операциями
 """
 import json
 import requests
@@ -17,15 +17,23 @@ import asyncio
 import aiohttp
 from datetime import datetime
 
+# Импорт YandexCloudML SDK
+try:
+    from yandex_cloud_ml_sdk import YCloudML
+    YANDEX_SDK_AVAILABLE = True
+except ImportError:
+    YANDEX_SDK_AVAILABLE = False
+    print("Warning: yandex_cloud_ml_sdk не установлен. Используется fallback к HTTP API")
+
 load_dotenv()
 
 
 class YandexGPT(LLM):
-    """Кастомная LLM для работы с YandexGPT API (синхронная версия)"""
+    """Кастомная LLM для работы с YandexGPT API через YandexCloudML SDK с асинхронными операциями"""
     
     api_key: str = Field(default_factory=lambda: os.getenv("YANDEX_API_KEY", ""))
     folder_id: str = Field(default_factory=lambda: os.getenv("YANDEX_FOLDER_ID", ""))
-    model_id: str = Field(default_factory=lambda: os.getenv("YANDEX_MODEL_ID", "yandexgpt-lite"))
+    model_id: str = Field(default_factory=lambda: os.getenv("YANDEX_MODEL_ID", "yandexgpt"))
     temperature: float = Field(default=0.7)
     max_tokens: int = Field(default=2000)
     
@@ -34,19 +42,72 @@ class YandexGPT(LLM):
     total_tokens: int = Field(default=0)
     last_request_time: Optional[datetime] = Field(default=None)
     
+    # YandexCloudML SDK объект (инициализируется лениво)
+    sdk: Optional[Any] = Field(default=None, exclude=True)
+    
     @property
     def _llm_type(self) -> str:
-        return "yandex_gpt"
+        return "yandex_gpt_sdk" if YANDEX_SDK_AVAILABLE else "yandex_gpt_http"
     
-    def _call(
-        self,
-        prompt: str,
-        stop: Optional[List[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
-        **kwargs: Any,
-    ) -> str:
-        """Вызов YandexGPT API"""
-        
+    def _get_sdk(self):
+        """Получает или создает экземпляр YandexCloudML SDK"""
+        if not YANDEX_SDK_AVAILABLE:
+            raise RuntimeError("YandexCloudML SDK не установлен")
+            
+        if self.sdk is None:
+            self.sdk = YCloudML(
+                folder_id=self.folder_id,
+                auth=self.api_key,
+            )
+        return self.sdk
+    
+    def _call_with_sdk(self, prompt: str, **kwargs) -> str:
+        """Вызов через YandexCloudML SDK с асинхронным ожиданием"""
+        try:
+            # Получаем SDK
+            sdk = self._get_sdk()
+            
+            # Обновляем параметры из kwargs
+            temperature = kwargs.get('temperature', self.temperature)
+            max_tokens = kwargs.get('max_tokens', self.max_tokens)
+            
+            # Получаем модель
+            model = sdk.models.completions(self.model_id)
+            
+            # Формируем сообщения в формате YandexCloudML
+            messages = [
+                {
+                    "role": "user",
+                    "text": prompt
+                }
+            ]
+            
+            # Запускаем асинхронную операцию с конфигурацией
+            operation = model.configure(
+                temperature=temperature,
+                max_tokens=max_tokens
+            ).run_deferred(messages)
+            
+            # Ждем завершения операции используя wait() - как во втором варианте из async_variant.py
+            result = operation.wait()
+            
+            # Извлекаем текст ответа
+            # Структура ответа: GPTModelResult(alternatives=(Alternative(text='...'),), ...)
+            if hasattr(result, 'alternatives') and result.alternatives:
+                # В асинхронном режиме: result.alternatives[0].text (не .message.text)
+                text_result = result.alternatives[0].text
+            elif hasattr(result, 'text'):
+                text_result = result.text
+            else:
+                text_result = str(result)
+            
+            return text_result
+            
+        except Exception as e:
+            raise Exception(f"Ошибка YandexCloudML SDK: {str(e)}")
+    
+    def _call_with_http(self, prompt: str, **kwargs) -> str:
+        """Fallback к HTTP API если SDK недоступен"""
         url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
         
         headers = {
@@ -73,35 +134,40 @@ class YandexGPT(LLM):
             ]
         }
         
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        
+        result = response.json()
+        return result["result"]["alternatives"][0]["message"]["text"]
+    
+    def _call(
+        self,
+        prompt: str,
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> str:
+        """Вызов YandexGPT API"""
+        
         try:
             # Обновляем метаданные
             self.request_count += 1
             self.last_request_time = datetime.now()
             
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
-            response.raise_for_status()
+            # Пытаемся использовать SDK, если доступен
+            if YANDEX_SDK_AVAILABLE:
+                text_result = self._call_with_sdk(prompt, **kwargs)
+            else:
+                text_result = self._call_with_http(prompt, **kwargs)
             
-            result = response.json()
-            text_result = result["result"]["alternatives"][0]["message"]["text"]
-            
-            # Примерная оценка токенов (YandexGPT не возвращает точное количество)
-            estimated_tokens = len(text_result.split()) * 1.3  # Приблизительная оценка
+            # Примерная оценка токенов
+            estimated_tokens = len(text_result.split()) * 1.3
             self.total_tokens += int(estimated_tokens)
             
             return text_result
             
-        except requests.exceptions.RequestException as e:
-            error_msg = f"Ошибка API запроса: {str(e)}"
-            if run_manager:
-                run_manager.on_llm_error(Exception(error_msg))
-            return error_msg
-        except KeyError as e:
-            error_msg = f"Ошибка парсинга ответа: {str(e)}"
-            if run_manager:
-                run_manager.on_llm_error(Exception(error_msg))
-            return error_msg
         except Exception as e:
-            error_msg = f"Неожиданная ошибка: {str(e)}"
+            error_msg = f"Ошибка YandexGPT: {str(e)}"
             if run_manager:
                 run_manager.on_llm_error(Exception(error_msg))
             return error_msg
@@ -114,7 +180,9 @@ class YandexGPT(LLM):
             'last_request_time': self.last_request_time.isoformat() if self.last_request_time else None,
             'model_id': self.model_id,
             'temperature': self.temperature,
-            'max_tokens': self.max_tokens
+            'max_tokens': self.max_tokens,
+            'sdk_available': YANDEX_SDK_AVAILABLE,
+            'sdk_type': 'yandex_cloud_ml_sdk' if YANDEX_SDK_AVAILABLE else 'http_api'
         }
     
     def reset_stats(self):
@@ -411,7 +479,7 @@ def create_yandex_llm(
     return YandexGPT(
         temperature=temperature,
         max_tokens=max_tokens,
-        model_id=model_id or os.getenv("YANDEX_MODEL_ID", "yandexgpt-lite")
+        model_id=model_id or os.getenv("YANDEX_MODEL_ID", "yandexgpt")
     )
 
 def create_yandex_chat(
@@ -443,7 +511,8 @@ def validate_yandex_config() -> Dict[str, Any]:
     config = {
         'api_key': bool(os.getenv("YANDEX_API_KEY")),
         'folder_id': bool(os.getenv("YANDEX_FOLDER_ID")),
-        'model_id': os.getenv("YANDEX_MODEL_ID", "yandexgpt-lite")
+        'model_id': os.getenv("YANDEX_MODEL_ID", "yandexgpt"),
+        'sdk_available': YANDEX_SDK_AVAILABLE
     }
     
     config['is_valid'] = config['api_key'] and config['folder_id']

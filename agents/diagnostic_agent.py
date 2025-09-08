@@ -466,18 +466,42 @@ class DiagnosticAgentLangGraph(LangGraphAgentBase):
                 critical_areas.append("Критически низкие оценки по большинству вопросов")
             
             # Ищем повторяющиеся проблемы в областях улучшения
-            improvement_areas = re.findall(r'Области улучшения: (.+)', analysis_data)
-            common_words = {}
-            for area in improvement_areas:
-                words = area.lower().split()
-                for word in words:
-                    if len(word) > 4:  # Игнорируем короткие слова
-                        common_words[word] = common_words.get(word, 0) + 1
+            improvement_areas = re.findall(r'(?:Области улучшения|Слабые стороны): (.+)', analysis_data)
             
-            # Добавляем часто упоминаемые проблемы
-            for word, count in common_words.items():
+            # Анализируем темы проблем
+            problem_themes = {
+                'понимание': ['понимание', 'понимает', 'непонимание', 'неправильное понимание'],
+                'полнота ответа': ['неполно', 'не полностью', 'отсутствие деталей', 'поверхностно'],
+                'конкретность': ['неконкретно', 'отсутствие примеров', 'абстрактно', 'нет конкретных'],
+                'структура': ['неструктурированно', 'хаотично', 'без логики', 'бессвязно'],
+                'знания': ['ошибки в фактах', 'неточности', 'неверная информация']
+            }
+            
+            # Подсчитываем упоминания тем
+            theme_counts = {}
+            for area in improvement_areas:
+                area_lower = area.lower()
+                for theme, keywords in problem_themes.items():
+                    for keyword in keywords:
+                        if keyword in area_lower:
+                            theme_counts[theme] = theme_counts.get(theme, 0) + 1
+                            break
+            
+            # Добавляем часто упоминаемые темы проблем
+            for theme, count in theme_counts.items():
                 if count >= 2:
-                    critical_areas.append(f"Повторяющиеся проблемы с: {word}")
+                    critical_areas.append(f"Систематические проблемы с: {theme}")
+            
+            # Также ищем точные повторения
+            exact_areas = {}
+            for area in improvement_areas:
+                cleaned_area = area.strip()
+                if len(cleaned_area) > 15:  # Игнорируем слишком короткие фразы
+                    exact_areas[cleaned_area] = exact_areas.get(cleaned_area, 0) + 1
+            
+            for area, count in exact_areas.items():
+                if count >= 2:
+                    critical_areas.append(f"Повторяющаяся проблема: {area}")
             
             if not critical_areas:
                 critical_areas.append("Критические области не выявлены")
