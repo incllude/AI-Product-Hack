@@ -6,6 +6,7 @@ import sys
 import os
 import json
 import time
+import uuid
 from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
@@ -16,6 +17,201 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'agents'))
 
 from exam_orchestrator import ExamOrchestrator
 from topic_manager import TopicManager
+
+class DialogLogger:
+    """Класс для логирования диалогов экзамена"""
+    
+    def __init__(self):
+        self.logs_dir = os.path.join(os.path.dirname(__file__), 'logs', 'dialogs')
+        os.makedirs(self.logs_dir, exist_ok=True)
+        self.session_id = None
+        self.log_file_path = None
+        self.dialog_data = None
+    
+    def start_session(self, student_name, topic_info, max_questions, use_theme_structure):
+        """Начало новой сессии диалога"""
+        self.session_id = str(uuid.uuid4())[:8]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Имя файла: dialog_YYYYMMDD_HHMMSS_sessionID.json
+        filename = f"dialog_{timestamp}_{self.session_id}.json"
+        self.log_file_path = os.path.join(self.logs_dir, filename)
+        
+        # Инициализация структуры данных диалога
+        self.dialog_data = {
+            "session_info": {
+                "session_id": self.session_id,
+                "student_name": student_name,
+                "start_time": datetime.now().isoformat(),
+                "end_time": None,
+                "status": "started"
+            },
+            "exam_config": {
+                "topic_info": topic_info,
+                "max_questions": max_questions,
+                "use_theme_structure": use_theme_structure
+            },
+            "messages": [],
+            "questions_and_answers": [],
+            "evaluations": [],
+            "final_report": None,
+            "statistics": {
+                "total_questions": 0,
+                "total_answers": 0,
+                "average_score": 0,
+                "total_score": 0,
+                "max_possible_score": 0
+            }
+        }
+        
+        self._save_log()
+        return self.session_id
+    
+    def log_message(self, role, content, message_type="text", metadata=None):
+        """Логирование сообщения в диалоге"""
+        if not self.dialog_data:
+            return
+        
+        message_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "role": role,
+            "content": content,
+            "type": message_type,
+            "metadata": metadata or {}
+        }
+        
+        self.dialog_data["messages"].append(message_entry)
+        self._save_log()
+    
+    def log_question(self, question_data):
+        """Логирование вопроса"""
+        if not self.dialog_data:
+            return
+        
+        question_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "question_number": question_data.get('question_number', 0),
+            "question": question_data.get('question', ''),
+            "topic_level": question_data.get('topic_level', ''),
+            "question_type": question_data.get('question_type', ''),
+            "metadata": question_data
+        }
+        
+        self.dialog_data["questions_and_answers"].append({
+            "question": question_entry,
+            "answer": None,
+            "evaluation": None
+        })
+        
+        self.dialog_data["statistics"]["total_questions"] += 1
+        self._save_log()
+    
+    def log_answer_and_evaluation(self, answer, evaluation_data):
+        """Логирование ответа и его оценки"""
+        if not self.dialog_data or not self.dialog_data["questions_and_answers"]:
+            return
+        
+        # Находим последний вопрос без ответа
+        for qa_pair in reversed(self.dialog_data["questions_and_answers"]):
+            if qa_pair["answer"] is None:
+                qa_pair["answer"] = {
+                    "timestamp": datetime.now().isoformat(),
+                    "content": answer
+                }
+                qa_pair["evaluation"] = {
+                    "timestamp": datetime.now().isoformat(),
+                    "total_score": evaluation_data.get('total_score', 0),
+                    "criteria_scores": evaluation_data.get('criteria_scores', {}),
+                    "strengths": evaluation_data.get('strengths', ''),
+                    "weaknesses": evaluation_data.get('weaknesses', ''),
+                    "metadata": evaluation_data
+                }
+                break
+        
+        # Обновляем статистику
+        self.dialog_data["statistics"]["total_answers"] += 1
+        
+        # Пересчитываем статистику оценок
+        evaluations = [qa["evaluation"] for qa in self.dialog_data["questions_and_answers"] if qa["evaluation"]]
+        if evaluations:
+            total_score = sum(eval_data["total_score"] for eval_data in evaluations)
+            max_possible = len(evaluations) * 10  # Максимум 10 баллов за вопрос
+            
+            self.dialog_data["statistics"]["total_score"] = total_score
+            self.dialog_data["statistics"]["max_possible_score"] = max_possible
+            self.dialog_data["statistics"]["average_score"] = total_score / len(evaluations)
+        
+        self._save_log()
+    
+    def log_final_report(self, final_report):
+        """Логирование финального отчета"""
+        if not self.dialog_data:
+            return
+        
+        self.dialog_data["final_report"] = {
+            "timestamp": datetime.now().isoformat(),
+            "report_data": final_report
+        }
+        
+        self._save_log()
+    
+    def end_session(self, status="completed"):
+        """Завершение сессии диалога"""
+        if not self.dialog_data:
+            return
+        
+        self.dialog_data["session_info"]["end_time"] = datetime.now().isoformat()
+        self.dialog_data["session_info"]["status"] = status
+        
+        # Вычисляем общую длительность сессии
+        start_time = datetime.fromisoformat(self.dialog_data["session_info"]["start_time"])
+        end_time = datetime.fromisoformat(self.dialog_data["session_info"]["end_time"])
+        duration = (end_time - start_time).total_seconds()
+        
+        self.dialog_data["session_info"]["duration_seconds"] = duration
+        self.dialog_data["session_info"]["duration_formatted"] = str(end_time - start_time)
+        
+        self._save_log()
+    
+    def _save_log(self):
+        """Сохранение лога в файл"""
+        if not self.dialog_data or not self.log_file_path:
+            return
+        
+        try:
+            # Создаем копию данных для сериализации
+            data_to_save = self._prepare_data_for_json(self.dialog_data)
+            
+            with open(self.log_file_path, 'w', encoding='utf-8') as f:
+                json.dump(data_to_save, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Ошибка при сохранении лога: {e}")
+    
+    def _prepare_data_for_json(self, data):
+        """Подготовка данных для JSON сериализации (конвертация datetime в строки)"""
+        if isinstance(data, dict):
+            return {key: self._prepare_data_for_json(value) for key, value in data.items()}
+        elif isinstance(data, list):
+            return [self._prepare_data_for_json(item) for item in data]
+        elif isinstance(data, datetime):
+            return data.isoformat()
+        else:
+            return data
+    
+    def get_session_summary(self):
+        """Получение краткой сводки по текущей сессии"""
+        if not self.dialog_data:
+            return None
+        
+        return {
+            "session_id": self.session_id,
+            "student_name": self.dialog_data["session_info"]["student_name"],
+            "topic_name": self.dialog_data["exam_config"]["topic_info"].get("name", "Unknown"),
+            "questions_count": self.dialog_data["statistics"]["total_questions"],
+            "answers_count": self.dialog_data["statistics"]["total_answers"],
+            "average_score": self.dialog_data["statistics"]["average_score"],
+            "log_file": self.log_file_path
+        }
 
 # Конфигурация страницы
 st.set_page_config(
@@ -55,15 +251,27 @@ def initialize_session_state():
     
     if 'first_question_generated' not in st.session_state:
         st.session_state.first_question_generated = False
+    
+    if 'dialog_logger' not in st.session_state:
+        st.session_state.dialog_logger = None
+    
+    if 'final_report_generated' not in st.session_state:
+        st.session_state.final_report_generated = False
 
-def add_message(role, content, message_type="text"):
+def add_message(role, content, message_type="text", metadata=None):
     """Добавление сообщения в чат"""
-    st.session_state.messages.append({
+    message = {
         "role": role,
         "content": content,
         "type": message_type,
         "timestamp": datetime.now()
-    })
+    }
+    
+    st.session_state.messages.append(message)
+    
+    # Логирование сообщения
+    if st.session_state.dialog_logger:
+        st.session_state.dialog_logger.log_message(role, content, message_type, metadata)
 
 def display_chat_messages():
     """Отображение истории чата"""
@@ -224,6 +432,15 @@ def start_exam(topic_info, max_questions, use_theme_structure):
     # Показываем индикатор загрузки
     with st.spinner("Инициализация экзамена..."):
         try:
+            # Инициализация логгера диалогов
+            st.session_state.dialog_logger = DialogLogger()
+            session_id = st.session_state.dialog_logger.start_session(
+                st.session_state.student_name, 
+                topic_info, 
+                max_questions, 
+                use_theme_structure
+            )
+            
             # Создание оркестратора
             st.session_state.orchestrator = ExamOrchestrator(
                 topic_info=topic_info,
@@ -238,6 +455,7 @@ def start_exam(topic_info, max_questions, use_theme_structure):
             st.session_state.topic_selected = True
             st.session_state.exam_completed = False
             st.session_state.first_question_generated = False
+            st.session_state.final_report_generated = False
             
             # Приветственное сообщение
             welcome_msg = f"""Добро пожаловать, {st.session_state.student_name}! 🎓
@@ -246,10 +464,11 @@ def start_exam(topic_info, max_questions, use_theme_structure):
 **Предмет:** {topic_info['subject']}
 **Вопросов:** {max_questions}
 **Режим:** {'Структурированный' if use_theme_structure else 'Быстрый'}
+**ID сессии:** {session_id}
 
 Экзамен готов к началу! Нажмите кнопку ниже для получения первого вопроса."""
             
-            add_message("assistant", welcome_msg)
+            add_message("assistant", welcome_msg, metadata={"session_id": session_id})
             
         except Exception as e:
             st.error(f"Ошибка при запуске экзамена: {str(e)}")
@@ -269,6 +488,10 @@ def get_next_question():
             st.session_state.current_question = question_data
             st.session_state.waiting_for_answer = True
             
+            # Логирование вопроса
+            if st.session_state.dialog_logger:
+                st.session_state.dialog_logger.log_question(question_data)
+            
             # Упрощенное форматирование вопроса
             question_text = f"""**Вопрос {question_data.get('question_number', '?')}**
 
@@ -276,7 +499,7 @@ def get_next_question():
 
 *Уровень: {question_data.get('topic_level', 'базовый')}*"""
             
-            add_message("assistant", question_text, "question")
+            add_message("assistant", question_text, "question", metadata=question_data)
             
         elif 'message' in question_data:
             # Экзамен завершен
@@ -305,6 +528,10 @@ def submit_answer(answer):
             # Отправляем ответ на оценку
             evaluation = st.session_state.orchestrator.submit_answer(answer)
             
+            # Логирование ответа и оценки
+            if st.session_state.dialog_logger:
+                st.session_state.dialog_logger.log_answer_and_evaluation(answer, evaluation)
+            
             # Упрощенное форматирование результата оценки
             eval_text = f"""**Оценка: {evaluation.get('total_score', 0)}/10 баллов**"""
             
@@ -325,7 +552,7 @@ def submit_answer(answer):
             if evaluation.get('weaknesses'):
                 eval_text += f"\n\n**❌ Области для улучшения:** {evaluation['weaknesses']}"
             
-            add_message("assistant", eval_text, "evaluation")
+            add_message("assistant", eval_text, "evaluation", metadata=evaluation)
             
             st.session_state.waiting_for_answer = False
             st.session_state.current_question = None
@@ -340,9 +567,11 @@ def submit_answer(answer):
             time.sleep(0.5)
             get_next_question()
     else:
-        # Экзамен завершен
+        # Экзамен завершен - генерируем финальный отчет напрямую
         st.session_state.exam_completed = True
-        generate_final_report()
+        with st.spinner("Подготовка финального отчета..."):
+            time.sleep(0.5)
+            generate_final_report()
     
     st.rerun()
 
@@ -351,15 +580,25 @@ def generate_final_report():
     if not st.session_state.orchestrator:
         return
     
+    # Защита от повторного вызова
+    if st.session_state.get('final_report_generated', False):
+        return
+    
     try:
-        # Завершаем экзамен если еще не завершен
-        if st.session_state.orchestrator.exam_session['status'] == 'in_progress':
-            st.session_state.orchestrator.force_complete()
-        
         # Получаем финальный отчет через complete_exam
         final_report = st.session_state.orchestrator.complete_exam()
         
+        # Логирование финального отчета
+        if st.session_state.dialog_logger:
+            st.session_state.dialog_logger.log_final_report(final_report)
+            st.session_state.dialog_logger.end_session("completed")
+        
         if 'error' not in final_report:
+            # Получаем краткую сводку сессии для отображения
+            session_summary = None
+            if st.session_state.dialog_logger:
+                session_summary = st.session_state.dialog_logger.get_session_summary()
+            
             report_text = f"""🎉 **Экзамен завершен!**
 
 **Итоговые результаты:**
@@ -374,12 +613,21 @@ def generate_final_report():
             for i, recommendation in enumerate(final_report['recommendations'][:3], 1):
                 report_text += f"\n{i}. {recommendation}"
             
-            add_message("assistant", report_text)
+            if session_summary:
+                report_text += f"\n\n📝 **Лог сессии сохранен:** `{os.path.basename(session_summary['log_file'])}`"
+            
+            add_message("assistant", report_text, metadata={"final_report": final_report})
+            # Устанавливаем флаг успешной генерации отчета
+            st.session_state.final_report_generated = True
         else:
             add_message("assistant", f"❌ Ошибка при генерации отчета: {final_report.get('error', 'Неизвестная ошибка')}")
+            # Даже при ошибке отмечаем попытку генерации, чтобы избежать повторов
+            st.session_state.final_report_generated = True
     
     except Exception as e:
         st.error(f"Ошибка при генерации финального отчета: {str(e)}")
+        # Отмечаем попытку генерации при исключении
+        st.session_state.final_report_generated = True
 
 def display_progress():
     """Отображение прогресса экзамена"""
@@ -503,7 +751,23 @@ def main():
         # Кнопка сброса экзамена
         if st.session_state.exam_started:
             st.sidebar.markdown("---")
+            
+            # Показываем информацию о текущей сессии
+            if st.session_state.dialog_logger:
+                session_summary = st.session_state.dialog_logger.get_session_summary()
+                if session_summary:
+                    st.sidebar.markdown("### 📝 Текущая сессия")
+                    st.sidebar.write(f"**ID:** {session_summary['session_id']}")
+                    st.sidebar.write(f"**Вопросов:** {session_summary['questions_count']}")
+                    st.sidebar.write(f"**Ответов:** {session_summary['answers_count']}")
+                    if session_summary['answers_count'] > 0:
+                        st.sidebar.write(f"**Средний балл:** {session_summary['average_score']:.1f}")
+            
             if st.sidebar.button("🔄 Начать заново", type="secondary"):
+                # Завершаем текущую сессию логирования
+                if st.session_state.dialog_logger:
+                    st.session_state.dialog_logger.end_session("reset")
+                
                 # Сброс состояния
                 keys_to_keep = ['student_name']
                 for key in list(st.session_state.keys()):

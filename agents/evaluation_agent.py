@@ -1,29 +1,30 @@
 """
-Агент для оценки ответов студентов на LangGraph
+Агент для изолированной оценки ответов студентов
 """
-from typing import Dict, List, Optional, Any
-from langgraph.graph import StateGraph, END
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-
-from base import LangGraphAgentBase, EvaluationState
-from yagpt_llm import create_yandex_llm
+from typing import Dict, List, Optional
+from langchain.schema import BaseMessage, HumanMessage, SystemMessage
+from langchain.prompts import PromptTemplate
+from langchain.chains import LLMChain
+from yagpt_llm import YandexGPT
 import json
 import re
-from datetime import datetime
 
 
-class EvaluationAgentLangGraph(LangGraphAgentBase):
-    """Агент для объективной изолированной оценки ответов на LangGraph"""
+class EvaluationAgent:
+    """Агент для объективной изолированной оценки ответов"""
     
     def __init__(self, subject: str = "Общие знания", topic_context: str = None):
-        super().__init__(subject, topic_context)
-        self.llm = create_yandex_llm()
-        self.evaluation_history = []
+        """
+        Инициализация агента
         
-        # Создаем граф состояний
-        self.graph = self._create_evaluation_graph()
-        self.app = self.graph.compile()
+        Args:
+            subject: Предмет экзамена
+            topic_context: Контекст конкретной темы экзамена
+        """
+        self.llm = YandexGPT()
+        self.subject = subject
+        self.topic_context = topic_context or f"Общий экзамен по предмету {subject}"
+        self.evaluation_history = []
         
         self._setup_prompts()
     
@@ -38,6 +39,7 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
 
 {topic_context}
 
+Оцени ТОЛЬКО этот конкретный ответ студента, не учитывая другие ответы или общий контекст экзамена.
 Ответ должен соответствовать указанной теме экзамена.
 
 ВОПРОС: {question}
@@ -93,232 +95,91 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
 """
         )
         
+        # Промпт для быстрой оценки (упрощенный)
+        self.quick_evaluation_prompt = PromptTemplate(
+            input_variables=["question", "student_answer", "key_points"],
+            template="""
+Быстро и объективно оцени ответ студента.
+
+ВОПРОС: {question}
+ОТВЕТ: {student_answer}
+КЛЮЧЕВЫЕ МОМЕНТЫ: {key_points}
+
+Оцени по шкале 0-10 и дай краткий комментарий.
+
+Формат:
+ОЦЕНКА: [балл]/10
+КОММЕНТАРИЙ: [краткое объяснение оценки]
+СОВЕТ: [один конкретный совет]
+"""
+        )
     
-    def _create_evaluation_graph(self) -> StateGraph:
-        """Создает граф состояний для оценки ответов"""
-        graph = StateGraph(EvaluationState)
+    def evaluate_answer(self, question: str, student_answer: str, key_points: str, 
+                       topic_level: str = "базовый", detailed: bool = True) -> Dict[str, any]:
+        """
+        Оценивает ответ студента изолированно
         
-        # Добавляем узлы
-        graph.add_node("validate_input", self._validate_input_node)
-        graph.add_node("handle_empty_answer", self._handle_empty_answer_node)
-        graph.add_node("detailed_evaluation", self._detailed_evaluation_node)
-        graph.add_node("parse_evaluation", self._parse_evaluation_node)
-        graph.add_node("create_summary", self._create_summary_node)
-        graph.add_node("save_to_history", self._save_to_history_node)
+        Args:
+            question: Текст вопроса
+            student_answer: Ответ студента
+            key_points: Ключевые моменты для ответа
+            topic_level: Уровень сложности темы
+            detailed: Использовать детальную оценку или быструю
+            
+        Returns:
+            Результат оценки
+        """
+        if not student_answer or student_answer.strip() == "":
+            return self._handle_empty_answer()
         
-        # Определяем точку входа
-        graph.set_entry_point("validate_input")
+        if detailed:
+            return self._detailed_evaluation(question, student_answer, key_points, topic_level)
+        else:
+            return self._quick_evaluation(question, student_answer, key_points)
+    
+    def _detailed_evaluation(self, question: str, student_answer: str, 
+                           key_points: str, topic_level: str) -> Dict[str, any]:
+        """Выполняет детальную оценку ответа"""
+        chain = LLMChain(llm=self.llm, prompt=self.evaluation_prompt)
         
-        # Добавляем условные ребра
-        graph.add_conditional_edges(
-            "validate_input",
-            self._decide_evaluation_path,
-            {
-                "empty_answer": "handle_empty_answer",
-                "detailed": "detailed_evaluation"
-            }
+        response = chain.run(
+            subject=self.subject,
+            topic_context=self.topic_context,
+            question=question,
+            student_answer=student_answer,
+            key_points=key_points,
+            topic_level=topic_level
         )
         
-        # Ребра к парсингу
-        graph.add_edge("detailed_evaluation", "parse_evaluation")
-        graph.add_edge("handle_empty_answer", "create_summary")  # Пустые ответы идут сразу к созданию summary
+        # Парсинг детальной оценки
+        evaluation = self._parse_detailed_evaluation(response)
         
-        # Ребра к созданию summary
-        graph.add_edge("parse_evaluation", "create_summary")
+        # Сохранение в историю
+        self.evaluation_history.append({
+            'question': question,
+            'answer': student_answer,
+            'evaluation': evaluation,
+            'timestamp': None  # Можно добавить datetime
+        })
         
-        # Ребра к сохранению в историю
-        graph.add_edge("create_summary", "save_to_history")
+        return evaluation
+    
+    def _quick_evaluation(self, question: str, student_answer: str, key_points: str) -> Dict[str, any]:
+        """Выполняет быструю оценку ответа"""
+        chain = LLMChain(llm=self.llm, prompt=self.quick_evaluation_prompt)
         
-        # Завершение
-        graph.add_edge("save_to_history", END)
+        response = chain.run(
+            question=question,
+            student_answer=student_answer,
+            key_points=key_points
+        )
         
-        return graph
-    
-    def _validate_input_node(self, state: EvaluationState) -> EvaluationState:
-        """Валидирует входные данные"""
-        try:
-            # Проверяем обязательные поля
-            if not state.get("question"):
-                state["error"] = "Отсутствует вопрос"
-                return state
-            
-            if not state.get("student_answer") or state["student_answer"].strip() == "":
-                state["evaluation_type"] = "empty"
-                return state
-            
-            # Всегда используем детальную оценку
-            state["evaluation_type"] = "detailed"
-            
-            self.log_operation("validate_input", state, None)
-            return state
-            
-        except Exception as e:
-            state["error"] = f"Ошибка валидации входных данных: {str(e)}"
-            self.log_operation("validate_input", state, None, str(e))
-            return state
-    
-    def _decide_evaluation_path(self, state: EvaluationState) -> str:
-        """Решает, какой путь использовать для оценки"""
-        if state.get("error"):
-            return "empty_answer"  # Fallback для ошибок
+        # Парсинг быстрой оценки
+        evaluation = self._parse_quick_evaluation(response)
         
-        evaluation_type = state.get("evaluation_type", "detailed")
-        
-        if evaluation_type == "empty":
-            return "empty_answer"
-        else:
-            return "detailed"
+        return evaluation
     
-    def _handle_empty_answer_node(self, state: EvaluationState) -> EvaluationState:
-        """Обрабатывает случай пустого ответа"""
-        try:
-            empty_result = {
-                'type': 'empty',
-                'total_score': 0,
-                'comment': "Ответ не предоставлен",
-                'feedback': "Студент не дал ответ на вопрос",
-                'raw_response': "EMPTY_ANSWER",
-                'timestamp': datetime.now()
-            }
-            
-            state["evaluation_result"] = empty_result
-            self.log_operation("handle_empty_answer", state, empty_result)
-            return state
-            
-        except Exception as e:
-            state["error"] = f"Ошибка обработки пустого ответа: {str(e)}"
-            self.log_operation("handle_empty_answer", state, None, str(e))
-            return state
-    
-    def _detailed_evaluation_node(self, state: EvaluationState) -> EvaluationState:
-        """Выполняет детальную оценку ответа"""
-        try:
-            chain = self.evaluation_prompt | self.llm | StrOutputParser()
-            
-            response = chain.invoke({
-                "subject": self.subject,
-                "topic_context": self.topic_context,
-                "question": state["question"],
-                "student_answer": state["student_answer"],
-                "key_points": state.get("key_points", ""),
-                "topic_level": state.get("topic_level", "базовый")
-            })
-            
-            print(response["topic_context"])
-            state["raw_evaluation"] = response
-            state["evaluation_type"] = "detailed"
-            self.log_operation("detailed_evaluation", state, response)
-            return state
-            
-        except Exception as e:
-            state["error"] = f"Ошибка детальной оценки: {str(e)}"
-            self.log_operation("detailed_evaluation", state, None, str(e))
-            return state
-    
-    
-    def _parse_evaluation_node(self, state: EvaluationState) -> EvaluationState:
-        """Парсит результат оценки"""
-        try:
-            if state.get("error") or not state.get("raw_evaluation"):
-                return state
-            
-            response = state["raw_evaluation"]
-            evaluation_type = state.get("evaluation_type", "detailed")
-            
-            # Всегда используем детальный парсинг
-            evaluation_result = self._parse_detailed_evaluation(response)
-            
-            # Добавляем метаданные
-            evaluation_result.update({
-                'timestamp': datetime.now(),
-                'question_metadata': state.get("question_metadata", {})
-            })
-            
-            state["evaluation_result"] = evaluation_result
-            self.log_operation("parse_evaluation", response, evaluation_result)
-            return state
-            
-        except Exception as e:
-            state["error"] = f"Ошибка парсинга оценки: {str(e)}"
-            self.log_operation("parse_evaluation", state, None, str(e))
-            return state
-    
-    def _create_summary_node(self, state: EvaluationState) -> EvaluationState:
-        """Создает сводку оценки БЕЗ текста ответа для передачи QuestionAgent"""
-        try:
-            evaluation_result = state.get("evaluation_result")
-            if not evaluation_result:
-                state["error"] = "Нет результата оценки для создания сводки"
-                return state
-            
-            question_metadata = state.get("question_metadata", {})
-            
-            summary = {
-                # Основные оценки
-                'total_score': evaluation_result.get('total_score', 0),
-                'criteria_scores': evaluation_result.get('criteria_scores', {}),
-                
-                # Характеристики качества ответа (обобщенные)
-                'strengths': evaluation_result.get('strengths', ''),
-                'weaknesses': evaluation_result.get('weaknesses', ''),
-                
-                # Метаданные вопроса
-                'bloom_level': question_metadata.get('bloom_level', 'unknown'),
-                'question_type': question_metadata.get('question_type', 'unknown'),
-                'topic_level': question_metadata.get('topic_level', 'unknown'),
-                
-                # Временные метки
-                'timestamp': evaluation_result.get('timestamp'),
-                'evaluation_type': evaluation_result.get('type', 'detailed'),
-                
-                # Индикаторы успеваемости
-                'performance_indicators': {
-                    'correctness_level': self._categorize_score(evaluation_result.get('criteria_scores', {}).get('correctness', 0)),
-                    'completeness_level': self._categorize_score(evaluation_result.get('criteria_scores', {}).get('completeness', 0)),
-                    'understanding_level': self._categorize_score(evaluation_result.get('criteria_scores', {}).get('understanding', 0)),
-                    'structure_level': self._categorize_score(evaluation_result.get('criteria_scores', {}).get('structure', 0)),
-                    'overall_level': self._categorize_score(evaluation_result.get('total_score', 0))
-                }
-                
-                # ВАЖНО: НЕ ВКЛЮЧАЕМ текст ответа студента для приватности
-                # 'student_answer': evaluation_result.get('student_answer')  # <-- ИСКЛЮЧЕНО
-            }
-            
-            state["evaluation_summary"] = summary
-            self.log_operation("create_summary", evaluation_result, summary)
-            return state
-            
-        except Exception as e:
-            state["error"] = f"Ошибка создания сводки: {str(e)}"
-            self.log_operation("create_summary", state, None, str(e))
-            return state
-    
-    def _save_to_history_node(self, state: EvaluationState) -> EvaluationState:
-        """Сохраняет результат в историю"""
-        try:
-            evaluation_result = state.get("evaluation_result")
-            if evaluation_result and not state.get("error"):
-                # Сохраняем в историю с полной информацией (включая текст ответа)
-                history_entry = {
-                    'question': state["question"],
-                    'answer': state["student_answer"],  # Сохраняем для DiagnosticAgent
-                    'evaluation': evaluation_result,
-                    'timestamp': evaluation_result.get('timestamp'),
-                    'question_metadata': state.get("question_metadata", {})
-                }
-                
-                self.evaluation_history.append(history_entry)
-                
-                self.log_operation("save_to_history", evaluation_result, "Saved successfully")
-            
-            return state
-            
-        except Exception as e:
-            state["error"] = f"Ошибка сохранения в историю: {str(e)}"
-            self.log_operation("save_to_history", state, None, str(e))
-            return state
-    
-    def _parse_detailed_evaluation(self, response: str) -> Dict[str, Any]:
+    def _parse_detailed_evaluation(self, response: str) -> Dict[str, any]:
         """Парсит детальную оценку"""
         # Извлечение оценок по критериям
         correctness_match = re.search(r'ПРАВИЛЬНОСТЬ:\s*(\d+)/10\s*-\s*(.+?)(?=\n|$)', response)
@@ -363,77 +224,31 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
             'raw_response': response
         }
     
-    
-    def _categorize_score(self, score: float) -> str:
-        """Категоризирует числовую оценку в текстовое описание"""
-        if score >= 9:
-            return "отлично"
-        elif score >= 7:
-            return "хорошо"
-        elif score >= 5:
-            return "удовлетворительно"
-        elif score >= 3:
-            return "слабо"
-        else:
-            return "неудовлетворительно"
-    
-    def evaluate_answer(self, question: str, student_answer: str, key_points: str, 
-                       topic_level: str = "базовый", detailed: bool = True) -> Dict[str, Any]:
-        """
-        Оценивает ответ студента изолированно с использованием LangGraph
+    def _parse_quick_evaluation(self, response: str) -> Dict[str, any]:
+        """Парсит быструю оценку"""
+        score_match = re.search(r'ОЦЕНКА:\s*(\d+)/10', response)
+        comment_match = re.search(r'КОММЕНТАРИЙ:\s*(.+?)(?=\nСОВЕТ:|$)', response, re.DOTALL)
+        advice_match = re.search(r'СОВЕТ:\s*(.+?)(?=\n|$)', response, re.DOTALL)
         
-        Args:
-            question: Текст вопроса
-            student_answer: Ответ студента
-            key_points: Ключевые моменты для ответа
-            topic_level: Уровень сложности темы
-            detailed: Использовать детальную оценку или быструю
-            
-        Returns:
-            Результат оценки
-        """
-        try:
-            # Создаем начальное состояние
-            initial_state = EvaluationState(
-                question=question,
-                student_answer=student_answer,
-                key_points=key_points,
-                topic_level=topic_level,
-                question_metadata={'detailed': detailed},
-                evaluation_result=None,
-                evaluation_summary=None,
-                error=None
-            )
-            
-            # Запускаем граф
-            result = self.app.invoke(initial_state)
-            
-            # Проверяем результат
-            if result.get("error"):
-                return {
-                    "error": result["error"],
-                    "type": "error",
-                    "total_score": 0,
-                    "timestamp": datetime.now()
-                }
-            
-            return result.get("evaluation_result", {})
-            
-        except Exception as e:
-            error_msg = f"Критическая ошибка в evaluate_answer: {str(e)}"
-            self.log_operation("evaluate_answer", {
-                "question": question[:100],
-                "answer": student_answer[:100]
-            }, None, error_msg)
-            
-            return {
-                "error": error_msg,
-                "type": "error", 
-                "total_score": 0,
-                "timestamp": datetime.now()
-            }
+        return {
+            'type': 'quick',
+            'total_score': int(score_match.group(1)) if score_match else 0,
+            'comment': comment_match.group(1).strip() if comment_match else "",
+            'advice': advice_match.group(1).strip() if advice_match else "",
+            'raw_response': response
+        }
     
-    def get_evaluation_statistics(self) -> Dict[str, Any]:
+    def _handle_empty_answer(self) -> Dict[str, any]:
+        """Обрабатывает случай пустого ответа"""
+        return {
+            'type': 'empty',
+            'total_score': 0,
+            'comment': "Ответ не предоставлен",
+            'feedback': "Студент не дал ответ на вопрос",
+            'raw_response': "EMPTY_ANSWER"
+        }
+    
+    def get_evaluation_statistics(self) -> Dict[str, any]:
         """Возвращает статистику по оценкам"""
         if not self.evaluation_history:
             return {'message': 'Нет данных для анализа'}
@@ -460,25 +275,6 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
     def get_evaluation_history(self) -> List[Dict]:
         """Возвращает историю оценок"""
         return self.evaluation_history.copy()
-    
-    def get_evaluation_summaries_for_question_agent(self) -> List[Dict]:
-        """
-        Возвращает список сводок оценок БЕЗ текстов ответов для QuestionAgent
-        
-        Returns:
-            Список характеристик оценок без приватной информации
-        """
-        summaries = []
-        
-        for evaluation in self.evaluation_history:
-            # Получаем метаданные вопроса из истории оценок
-            question_metadata = evaluation.get('question_metadata', {})
-            
-            # Создаем summary без текста ответа
-            summary = self.create_evaluation_summary(evaluation['evaluation'], question_metadata)
-            summaries.append(summary)
-        
-        return summaries
     
     def create_evaluation_summary(self, evaluation_result: Dict, question_data: Dict = None) -> Dict:
         """
@@ -516,7 +312,7 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
                 'understanding_level': self._categorize_score(evaluation_result.get('criteria_scores', {}).get('understanding', 0)),
                 'structure_level': self._categorize_score(evaluation_result.get('criteria_scores', {}).get('structure', 0)),
                 'overall_level': self._categorize_score(evaluation_result.get('total_score', 0))
-            }
+            },
             
             # ВАЖНО: НЕ ВКЛЮЧАЕМ текст ответа студента для приватности
             # 'student_answer': evaluation_result.get('student_answer')  # <-- ИСКЛЮЧЕНО
@@ -524,27 +320,38 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
         
         return summary
     
+    def _categorize_score(self, score: float) -> str:
+        """Категоризирует числовую оценку в текстовое описание"""
+        if score >= 9:
+            return "отлично"
+        elif score >= 7:
+            return "хорошо"
+        elif score >= 5:
+            return "удовлетворительно"
+        elif score >= 3:
+            return "слабо"
+        else:
+            return "неудовлетворительно"
+    
+    def get_evaluation_summaries_for_question_agent(self) -> List[Dict]:
+        """
+        Возвращает список сводок оценок БЕЗ текстов ответов для QuestionAgent
+        
+        Returns:
+            Список характеристик оценок без приватной информации
+        """
+        summaries = []
+        
+        for evaluation in self.evaluation_history:
+            # Получаем метаданные вопроса из истории оценок
+            question_data = evaluation.get('question_metadata', {})
+            
+            # Создаем summary без текста ответа
+            summary = self.create_evaluation_summary(evaluation, question_data)
+            summaries.append(summary)
+        
+        return summaries
+    
     def reset_history(self):
         """Сбрасывает историю оценок"""
         self.evaluation_history = []
-        super().reset_history()
-
-
-# Функция для создания EvaluationAgent на LangGraph
-def create_evaluation_agent(
-    subject: str = "Общие знания",
-    topic_context: str = None
-) -> EvaluationAgentLangGraph:
-    """Создает экземпляр EvaluationAgent на LangGraph"""
-    return EvaluationAgentLangGraph(
-        subject=subject,
-        topic_context=topic_context
-    )
-
-# Псевдоним для обратной совместимости
-def create_evaluation_agent_langgraph(
-    subject: str = "Общие знания",
-    topic_context: str = None
-) -> EvaluationAgentLangGraph:
-    """Создает экземпляр EvaluationAgent на LangGraph (псевдоним для обратной совместимости)"""
-    return create_evaluation_agent(subject, topic_context)

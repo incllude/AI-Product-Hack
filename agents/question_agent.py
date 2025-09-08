@@ -1,34 +1,36 @@
 """
-Агент для генерации вопросов на LangGraph
+Агент для генерации вопросов на основе темы и предыдущих ответов студента
 """
-from typing import Dict, List, Optional, Any, TypedDict
-from langgraph.graph import StateGraph, END
-# ToolExecutor больше не используется в новых версиях LangGraph
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
-
-from base import LangGraphAgentBase, QuestionState, ExamState
-from yagpt_llm import create_yandex_llm, YandexGPT
+from typing import Dict, List, Optional
+from langchain.schema import BaseMessage, HumanMessage, SystemMessage
+from langchain.prompts import PromptTemplate
+from langchain.chains import LLMChain
+from yagpt_llm import YandexGPT
 import json
 import re
-from datetime import datetime
 
 
-class QuestionAgentLangGraph(LangGraphAgentBase):
-    """Агент для генерации вопросов с использованием LangGraph"""
+class QuestionAgent:
+    """Агент для умной генерации вопросов с учетом контекста"""
     
-    def __init__(self, subject: str = "Общие знания", difficulty: str = "средний", 
-                 topic_context: str = None, theme_structure: dict = None):
-        super().__init__(subject, topic_context)
-        self.difficulty = difficulty
-        self.theme_structure = theme_structure
-        self.llm = create_yandex_llm()
-        self.current_theme_position = 0
+    def __init__(self, subject: str = "Общие знания", difficulty: str = "средний", topic_context: str = None, theme_structure: dict = None):
+        """
+        Инициализация агента
         
-        # Создаем граф состояний
-        self.graph = self._create_question_graph()
-        self.app = self.graph.compile()
+        Args:
+            subject: Предмет экзамена
+            difficulty: Уровень сложности (легкий, средний, сложный)
+            topic_context: Контекст конкретной темы экзамена
+            theme_structure: Тематическая структура от ThemeAgent
+        """
+        self.llm = YandexGPT()
+        self.subject = subject
+        self.difficulty = difficulty
+        self.topic_context = topic_context or f"Общий экзамен по предмету {subject}"
+        self.theme_structure = theme_structure
+        self.question_history = []
+        self.answer_history = []
+        self.current_theme_position = 0  # Позиция в тематической последовательности
         
         self._setup_prompts()
     
@@ -64,8 +66,7 @@ class QuestionAgentLangGraph(LangGraphAgentBase):
         
         # Промпт для последующих вопросов с учетом контекста
         self.contextual_question_prompt = PromptTemplate(
-            input_variables=["subject", "difficulty", "question_number", "topic_context", 
-                           "previous_questions", "evaluation_characteristics"],
+            input_variables=["subject", "difficulty", "question_number", "topic_context", "previous_questions", "previous_answers"],
             template="""
 Ты эксперт-экзаменатор по предмету "{subject}".
 
@@ -76,8 +77,8 @@ class QuestionAgentLangGraph(LangGraphAgentBase):
 ПРЕДЫДУЩИЕ ВОПРОСЫ:
 {previous_questions}
 
-ХАРАКТЕРИСТИКИ ПРЕДЫДУЩИХ ОТВЕТОВ:
-{evaluation_characteristics}
+ОТВЕТЫ СТУДЕНТА:
+{previous_answers}
 
 Требования к новому вопросу:
 - НЕ повторяй уже заданные вопросы
@@ -102,8 +103,7 @@ class QuestionAgentLangGraph(LangGraphAgentBase):
         
         # Промпт для генерации вопросов на основе руководящих принципов ThemeAgent
         self.theme_guided_question_prompt = PromptTemplate(
-            input_variables=["subject", "topic_context", "difficulty", "question_requirements", 
-                           "evaluation_characteristics"],
+            input_variables=["subject", "topic_context", "difficulty", "question_requirements", "evaluation_characteristics"],
             template="""
 Ты эксперт-экзаменатор по предмету "{subject}".
 
@@ -151,323 +151,70 @@ class QuestionAgentLangGraph(LangGraphAgentBase):
 """
         )
     
-    def _create_question_graph(self) -> StateGraph:
-        """Создает граф состояний для генерации вопросов"""
-        graph = StateGraph(QuestionState)
-        
-        # Добавляем узлы
-        graph.add_node("determine_question_type", self._determine_question_type)
-        graph.add_node("generate_initial_question", self._generate_initial_question_node)
-        graph.add_node("generate_contextual_question", self._generate_contextual_question_node)
-        graph.add_node("generate_theme_guided_question", self._generate_theme_guided_question_node)
-        graph.add_node("parse_question_response", self._parse_question_response_node)
-        graph.add_node("validate_question", self._validate_question_node)
-        
-        # Определяем точку входа
-        graph.set_entry_point("determine_question_type")
-        
-        # Добавляем условные ребра
-        graph.add_conditional_edges(
-            "determine_question_type",
-            self._decide_question_path,
-            {
-                "initial": "generate_initial_question",
-                "contextual": "generate_contextual_question", 
-                "theme_guided": "generate_theme_guided_question"
-            }
-        )
-        
-        # Добавляем ребра к парсингу
-        graph.add_edge("generate_initial_question", "parse_question_response")
-        graph.add_edge("generate_contextual_question", "parse_question_response")
-        graph.add_edge("generate_theme_guided_question", "parse_question_response")
-        
-        # Добавляем ребро к валидации
-        graph.add_edge("parse_question_response", "validate_question")
-        
-        # Завершение
-        graph.add_edge("validate_question", END)
-        
-        return graph
-    
-    def _determine_question_type(self, state: QuestionState) -> QuestionState:
-        """Определяет тип вопроса для генерации"""
-        try:
-            # Логируем операцию
-            self.log_operation("determine_question_type", state, None)
-            
-            # Если есть тематическая структура, используем её
-            if self.theme_structure:
-                state["question_type"] = "theme_guided"
-                return state
-            
-            # Если это первый вопрос
-            if state["question_number"] == 1 or not state.get("evaluation_summaries"):
-                state["question_type"] = "initial"
-                return state
-            
-            # Иначе используем контекстный подход
-            state["question_type"] = "contextual"
-            return state
-            
-        except Exception as e:
-            state["error"] = f"Ошибка определения типа вопроса: {str(e)}"
-            self.log_operation("determine_question_type", state, None, str(e))
-            return state
-    
-    def _decide_question_path(self, state: QuestionState) -> str:
-        """Решает, какой путь использовать для генерации"""
-        if state.get("error"):
-            return "initial"  # Fallback к начальному вопросу
-        
-        return state.get("question_type", "initial")
-    
-    def _generate_initial_question_node(self, state: QuestionState) -> QuestionState:
-        """Генерирует первый вопрос"""
-        try:
-            chain = self.initial_question_prompt | self.llm | StrOutputParser()
-            
-            response = chain.invoke({
-                "subject": self.subject,
-                "difficulty": self.difficulty,
-                "topic_context": self.topic_context
-            })
-            
-            state["raw_response"] = response
-            self.log_operation("generate_initial_question", state, response)
-            return state
-            
-        except Exception as e:
-            state["error"] = f"Ошибка генерации начального вопроса: {str(e)}"
-            self.log_operation("generate_initial_question", state, None, str(e))
-            return state
-    
-    def _generate_contextual_question_node(self, state: QuestionState) -> QuestionState:
-        """Генерирует контекстный вопрос"""
-        try:
-            # Форматируем предыдущие вопросы
-            previous_questions = self._format_previous_questions()
-            
-            # Форматируем характеристики оценок
-            evaluation_characteristics = self._format_evaluation_characteristics(
-                state.get("evaluation_summaries", [])
-            )
-            
-            chain = self.contextual_question_prompt | self.llm | StrOutputParser()
-            
-            response = chain.invoke({
-                "subject": self.subject,
-                "difficulty": self.difficulty,
-                "question_number": state["question_number"],
-                "topic_context": self.topic_context,
-                "previous_questions": previous_questions,
-                "evaluation_characteristics": evaluation_characteristics
-            })
-            
-            state["raw_response"] = response
-            self.log_operation("generate_contextual_question", state, response)
-            return state
-            
-        except Exception as e:
-            state["error"] = f"Ошибка генерации контекстного вопроса: {str(e)}"
-            self.log_operation("generate_contextual_question", state, None, str(e))
-            return state
-    
-    def _generate_theme_guided_question_node(self, state: QuestionState) -> QuestionState:
-        """Генерирует вопрос на основе тематической структуры"""
-        try:
-            # Получаем требования для следующего вопроса
-            theme_requirements = self._get_next_question_requirements()
-            
-            if not theme_requirements or theme_requirements.get("error"):
-                # Fallback к контекстному вопросу
-                return self._generate_contextual_question_node(state)
-            
-            # Форматируем требования и характеристики
-            requirements_text = self._format_requirements_for_prompt(theme_requirements)
-            evaluation_characteristics = self._format_evaluation_characteristics(
-                state.get("evaluation_summaries", [])
-            )
-            
-            chain = self.theme_guided_question_prompt | self.llm | StrOutputParser()
-            
-            response = chain.invoke({
-                "subject": self.subject,
-                "topic_context": self.topic_context,
-                "difficulty": self.difficulty,
-                "question_requirements": requirements_text,
-                "evaluation_characteristics": evaluation_characteristics
-            })
-            
-            state["raw_response"] = response
-            state["theme_requirements"] = theme_requirements
-            self.log_operation("generate_theme_guided_question", state, response)
-            return state
-            
-        except Exception as e:
-            state["error"] = f"Ошибка генерации тематического вопроса: {str(e)}"
-            self.log_operation("generate_theme_guided_question", state, None, str(e))
-            return state
-    
-    def _parse_question_response_node(self, state: QuestionState) -> QuestionState:
-        """Парсит ответ с вопросом"""
-        try:
-            if state.get("error") or not state.get("raw_response"):
-                return state
-            
-            response = state["raw_response"]
-            
-            # Базовый парсинг
-            question_match = re.search(r'ВОПРОС:\s*(.+?)(?=\n|$)', response, re.DOTALL)
-            key_points_match = re.search(r'КЛЮЧЕВЫЕ_МОМЕНТЫ:\s*(.+?)(?=\n|$)', response)
-            level_match = re.search(r'УРОВЕНЬ_ТЕМЫ:\s*(.+?)(?=\n|$)', response)
-            reasoning_match = re.search(r'ОБОСНОВАНИЕ:\s*(.+?)(?=\n|$)', response, re.DOTALL)
-            
-            # Дополнительные поля для тематических вопросов
-            bloom_level_match = re.search(r'УРОВЕНЬ_БЛУМА:\s*(.+?)(?=\n|$)', response)
-            direction_match = re.search(r'ТЕМАТИЧЕСКОЕ_НАПРАВЛЕНИЕ:\s*(.+?)(?=\n|$)', response)
-            process_match = re.search(r'КОГНИТИВНЫЙ_ПРОЦЕСС:\s*(.+?)(?=\n|$)', response)
-            criteria_match = re.search(r'КРИТЕРИИ_ОЦЕНКИ:\s*(.+?)(?=\n|$)', response, re.DOTALL)
-            adaptation_match = re.search(r'АДАПТАЦИЯ:\s*(.+?)(?=\n|$)', response, re.DOTALL)
-            
-            question_data = {
-                'question': question_match.group(1).strip() if question_match else "Вопрос не найден",
-                'key_points': key_points_match.group(1).strip() if key_points_match else "",
-                'topic_level': level_match.group(1).strip() if level_match else "базовый",
-                'reasoning': reasoning_match.group(1).strip() if reasoning_match else "",
-                'question_number': state["question_number"],
-                'timestamp': datetime.now(),
-                'raw_response': response
-            }
-            
-            # Добавляем поля для тематических вопросов
-            if bloom_level_match or state.get("theme_requirements"):
-                theme_requirements = state.get("theme_requirements", {})
-                question_data.update({
-                    'bloom_level': theme_requirements.get('bloom_level', 'remember'),
-                    'bloom_level_name': theme_requirements.get('level_name', 'Не указан'),
-                    'thematic_direction': direction_match.group(1).strip() if direction_match else "",
-                    'cognitive_process': process_match.group(1).strip() if process_match else "",
-                    'evaluation_criteria': criteria_match.group(1).strip() if criteria_match else "",
-                    'adaptation_notes': adaptation_match.group(1).strip() if adaptation_match else "",
-                    'theme_requirements': theme_requirements,
-                    'topic_level': self._map_bloom_to_topic_level(theme_requirements.get('bloom_level', 'remember'))
-                })
-            
-            state["generated_question"] = question_data
-            self.log_operation("parse_question_response", response, question_data)
-            return state
-            
-        except Exception as e:
-            state["error"] = f"Ошибка парсинга вопроса: {str(e)}"
-            self.log_operation("parse_question_response", state, None, str(e))
-            return state
-    
-    def _validate_question_node(self, state: QuestionState) -> QuestionState:
-        """Валидирует сгенерированный вопрос"""
-        try:
-            if state.get("error"):
-                return state
-            
-            question_data = state.get("generated_question")
-            if not question_data:
-                state["error"] = "Нет данных вопроса для валидации"
-                return state
-            
-            # Базовая валидация
-            validation_errors = []
-            
-            if not question_data.get("question") or question_data["question"] == "Вопрос не найден":
-                validation_errors.append("Не удалось извлечь текст вопроса")
-            
-            if len(question_data.get("question", "")) < 10:
-                validation_errors.append("Вопрос слишком короткий")
-            
-            if not question_data.get("key_points"):
-                validation_errors.append("Отсутствуют ключевые моменты")
-            
-            # Проверка на повторение (если есть история)
-            if hasattr(self, 'question_history'):
-                for prev_q in self.question_history:
-                    if prev_q.get("question", "").lower() == question_data["question"].lower():
-                        validation_errors.append("Вопрос повторяется")
-                        break
-            
-            if validation_errors:
-                state["error"] = f"Ошибки валидации: {'; '.join(validation_errors)}"
-            else:
-                # Обновляем позицию в тематической структуре
-                if self.theme_structure:
-                    self.current_theme_position += 1
-                
-                # Добавляем в историю
-                if not hasattr(self, 'question_history'):
-                    self.question_history = []
-                self.question_history.append(question_data)
-            
-            self.log_operation("validate_question", question_data, validation_errors)
-            return state
-            
-        except Exception as e:
-            state["error"] = f"Ошибка валидации вопроса: {str(e)}"
-            self.log_operation("validate_question", state, None, str(e))
-            return state
-    
-    def generate_question(self, question_number: int, evaluation_summaries: List[Dict] = None) -> Dict[str, Any]:
+    def generate_question(self, question_number: int, evaluation_summaries: List[Dict] = None) -> Dict[str, str]:
         """
-        Генерирует вопрос с использованием LangGraph
+        Генерирует вопрос с учетом характеристик от EvaluationAgent (БЕЗ текстов ответов)
         
         Args:
             question_number: Номер вопроса
-            evaluation_summaries: Список характеристик оценок от EvaluationAgent
+            evaluation_summaries: Список характеристик оценок от EvaluationAgent (БЕЗ текстов ответов)
             
         Returns:
             Словарь с вопросом и метаданными
         """
-        try:
-            # Создаем начальное состояние
-            initial_state = QuestionState(
-                question_number=question_number,
-                evaluation_summaries=evaluation_summaries or [],
-                theme_requirements=None,
-                generated_question=None,
-                error=None,
-                raw_response=None, # Добавляем отсутствующее поле
-                question_type=None # Добавляем отсутствующее поле
-            )
-            
-            # Запускаем граф
-            result = self.app.invoke(initial_state)
-            
-            # Проверяем результат
-            if result.get("error"):
-                return {
-                    "error": result["error"],
-                    "question": "Ошибка генерации вопроса",
-                    "key_points": "",
-                    "question_number": question_number,
-                    "timestamp": datetime.now()
-                }
-            
-            return result.get("generated_question", {})
-            
-        except Exception as e:
-            error_msg = f"Критическая ошибка в generate_question: {str(e)}"
-            self.log_operation("generate_question", {"question_number": question_number}, None, error_msg)
-            
-            return {
-                "error": error_msg,
-                "question": "Ошибка генерации вопроса",
-                "key_points": "",
-                "question_number": question_number,
-                "timestamp": datetime.now()
-            }
+        # Если есть тематическая структура от ThemeAgent, используем её
+        if self.theme_structure:
+            return self._generate_theme_guided_question(question_number, evaluation_summaries)
+        
+        # Иначе используем обычную логику
+        if question_number == 1 or not evaluation_summaries:
+            return self._generate_initial_question()
+        else:
+            # Для обычной логики конвертируем evaluation_summaries в старый формат
+            legacy_answers = self._convert_summaries_to_legacy_format(evaluation_summaries)
+            return self._generate_contextual_question(question_number, legacy_answers)
     
-    # Вспомогательные методы (скопированы из оригинального агента с адаптацией)
+    def _generate_initial_question(self) -> Dict[str, str]:
+        """Генерирует первый вопрос"""
+        chain = LLMChain(llm=self.llm, prompt=self.initial_question_prompt)
+        
+        response = chain.run(
+            subject=self.subject,
+            difficulty=self.difficulty,
+            topic_context=self.topic_context
+        )
+        
+        question_data = self._parse_question_response(response)
+        self.question_history.append(question_data)
+        
+        return question_data
+    
+    def _generate_contextual_question(self, question_number: int, previous_answers: List[Dict]) -> Dict[str, str]:
+        """Генерирует вопрос с учетом контекста"""
+        
+        # Анализ предыдущих вопросов и ответов
+        previous_questions_text = self._format_previous_questions()
+        previous_answers_text = self._format_previous_answers(previous_answers)
+        
+        chain = LLMChain(llm=self.llm, prompt=self.contextual_question_prompt)
+        
+        response = chain.run(
+            subject=self.subject,
+            difficulty=self.difficulty,
+            question_number=question_number,
+            topic_context=self.topic_context,
+            previous_questions=previous_questions_text,
+            previous_answers=previous_answers_text
+        )
+        
+        question_data = self._parse_question_response(response)
+        self.question_history.append(question_data)
+        
+        return question_data
     
     def _format_previous_questions(self) -> str:
         """Форматирует предыдущие вопросы для промпта"""
-        if not hasattr(self, 'question_history') or not self.question_history:
+        if not self.question_history:
             return "Нет предыдущих вопросов"
         
         formatted = ""
@@ -476,51 +223,76 @@ class QuestionAgentLangGraph(LangGraphAgentBase):
         
         return formatted
     
-    def _format_evaluation_characteristics(self, evaluation_summaries: List[Dict]) -> str:
-        """Форматирует характеристики оценок БЕЗ текстов ответов студента"""
-        if not evaluation_summaries:
-            return "Предыдущих оценок нет - это первый вопрос."
+    def _format_previous_answers(self, previous_answers: List[Dict]) -> str:
+        """Форматирует предыдущие ответы для промпта"""
+        if not previous_answers:
+            return "Нет предыдущих ответов"
         
-        characteristics = []
+        formatted = ""
+        for i, answer in enumerate(previous_answers, 1):
+            formatted += f"{i}. {answer.get('answer', 'Нет ответа')}\n"
+            formatted += f"   Оценка: {answer.get('score', 0)}/10\n"
+            if 'feedback' in answer:
+                formatted += f"   Комментарий: {answer['feedback']}\n"
+            formatted += "\n"
         
-        for i, summary in enumerate(evaluation_summaries, 1):
-            char_text = f"ОТВЕТ {i}:\n"
-            
-            # Оценки по критериям (БЕЗ содержания ответа)
-            if 'criteria_scores' in summary:
-                scores = summary['criteria_scores']
-                char_text += f"  • Правильность: {scores.get('correctness', 0)}/10\n"
-                char_text += f"  • Полнота: {scores.get('completeness', 0)}/10\n"
-                char_text += f"  • Понимание: {scores.get('understanding', 0)}/10\n"
-                char_text += f"  • Структурированность: {scores.get('structure', 0)}/10\n"
-            
-            # Общий балл
-            char_text += f"  • Общий балл: {summary.get('total_score', 0)}/10\n"
-            
-            # Сильные стороны (обобщенно)
-            if 'strengths' in summary:
-                char_text += f"  • Сильные стороны: {summary['strengths'][:100]}...\n"
-            
-            # Области для улучшения (обобщенно)
-            if 'weaknesses' in summary:
-                char_text += f"  • Слабые стороны: {summary['weaknesses'][:100]}...\n"
-            
-            # Уровень Блума
-            if 'bloom_level' in summary:
-                char_text += f"  • Уровень Блума: {summary['bloom_level']}\n"
-            
-            characteristics.append(char_text)
+        return formatted
+    
+    
+    def _parse_question_response(self, response: str) -> Dict[str, str]:
+        """Парсит ответ с вопросом"""
+        question_match = re.search(r'ВОПРОС:\s*(.+?)(?=\n|$)', response, re.DOTALL)
+        key_points_match = re.search(r'КЛЮЧЕВЫЕ_МОМЕНТЫ:\s*(.+?)(?=\n|$)', response)
+        level_match = re.search(r'УРОВЕНЬ_ТЕМЫ:\s*(.+?)(?=\n|$)', response)
+        reasoning_match = re.search(r'ОБОСНОВАНИЕ:\s*(.+?)(?=\n|$)', response, re.DOTALL)
         
-        return "\n".join(characteristics)
+        return {
+            'question': question_match.group(1).strip() if question_match else "Вопрос не найден",
+            'key_points': key_points_match.group(1).strip() if key_points_match else "",
+            'topic_level': level_match.group(1).strip() if level_match else "базовый",
+            'reasoning': reasoning_match.group(1).strip() if reasoning_match else "",
+            'raw_response': response
+        }
+    
+    def get_question_history(self) -> List[Dict]:
+        """Возвращает историю заданных вопросов"""
+        return self.question_history.copy()
+    
+    def _generate_theme_guided_question(self, question_number: int, evaluation_summaries: List[Dict] = None) -> Dict[str, str]:
+        """
+        Генерирует вопрос согласно требованиям ThemeAgent на основе характеристик от EvaluationAgent
+        
+        Args:
+            question_number: Номер вопроса
+            evaluation_summaries: Список характеристик оценок (БЕЗ текстов ответов)
+            
+        Returns:
+            Словарь с вопросом и метаданными
+        """
+        # Получаем требования для следующего вопроса от ThemeAgent
+        question_requirements = self._get_next_question_requirements()
+        
+        if not question_requirements:
+            # Если требования закончились, генерируем обычный вопрос
+            return self._generate_contextual_question(question_number, [])
+        
+        # Генерируем вопрос на основе требований ThemeAgent и характеристик оценок
+        theme_question = self._create_question_from_requirements(question_requirements, evaluation_summaries)
+        
+        self.question_history.append(theme_question)
+        self.current_theme_position += 1
+        
+        return theme_question
     
     def _get_next_question_requirements(self) -> Optional[Dict]:
         """Получает требования для следующего вопроса от ThemeAgent"""
         if not self.theme_structure:
             return None
         
+        # Используем метод ThemeAgent для получения требований
         try:
-            from theme_agent import ThemeAgentLangGraph
-            theme_agent = ThemeAgentLangGraph()
+            from theme_agent import ThemeAgent
+            theme_agent = ThemeAgent()
             requirements = theme_agent.get_next_bloom_level_requirements(
                 self.theme_structure, 
                 self.current_theme_position
@@ -528,6 +300,37 @@ class QuestionAgentLangGraph(LangGraphAgentBase):
             return requirements
         except:
             return None
+    
+    def _create_question_from_requirements(self, requirements: Dict, evaluation_summaries: List[Dict] = None) -> Dict[str, str]:
+        """
+        Создает вопрос на основе требований ThemeAgent и характеристик от EvaluationAgent
+        
+        Args:
+            requirements: Требования от ThemeAgent
+            evaluation_summaries: Обобщенные характеристики от EvaluationAgent (БЕЗ текстов ответов)
+            
+        Returns:
+            Сгенерированный вопрос
+        """
+        # Подготавливаем характеристики оценок (без текстов ответов)
+        evaluation_characteristics = self._format_evaluation_characteristics(evaluation_summaries or [])
+        
+        # Форматируем требования для промпта
+        requirements_text = self._format_requirements_for_prompt(requirements)
+        
+        # Генерируем вопрос через LLM
+        chain = LLMChain(llm=self.llm, prompt=self.theme_guided_question_prompt)
+        
+        response = chain.run(
+            subject=self.subject,
+            topic_context=self.topic_context,
+            difficulty=self.difficulty,
+            question_requirements=requirements_text,
+            evaluation_characteristics=evaluation_characteristics
+        )
+        
+        # Парсим и структурируем ответ
+        return self._parse_theme_guided_question(response, requirements)
     
     def _format_requirements_for_prompt(self, requirements: Dict) -> str:
         """Форматирует требования ThemeAgent для промпта"""
@@ -569,6 +372,106 @@ class QuestionAgentLangGraph(LangGraphAgentBase):
         
         return text
     
+    def _format_evaluation_characteristics(self, evaluation_summaries: List[Dict]) -> str:
+        """
+        Форматирует характеристики оценок БЕЗ текстов ответов студента
+        
+        Args:
+            evaluation_summaries: Список характеристик от EvaluationAgent
+            
+        Returns:
+            Форматированный текст характеристик
+        """
+        if not evaluation_summaries:
+            return "Предыдущих оценок нет - это первый вопрос."
+        
+        characteristics = []
+        
+        for i, summary in enumerate(evaluation_summaries, 1):
+            char_text = f"ОТВЕТ {i}:\n"
+            
+            # Оценки по критериям (БЕЗ содержания ответа)
+            if 'criteria_scores' in summary:
+                scores = summary['criteria_scores']
+                char_text += f"  • Правильность: {scores.get('correctness', 0)}/10\n"
+                char_text += f"  • Полнота: {scores.get('completeness', 0)}/10\n"
+                char_text += f"  • Понимание: {scores.get('understanding', 0)}/10\n"
+                char_text += f"  • Структурированность: {scores.get('structure', 0)}/10\n"
+            
+            # Общий балл
+            char_text += f"  • Общий балл: {summary.get('total_score', 0)}/10\n"
+            
+            # Сильные стороны (обобщенно)
+            if 'strengths' in summary:
+                char_text += f"  • Сильные стороны: {summary['strengths'][:100]}...\n"
+            
+            # Области для улучшения (обобщенно)
+            if 'weaknesses' in summary:
+                char_text += f"  • Слабые стороны: {summary['weaknesses'][:100]}...\n"
+            
+            # Уровень Блума
+            if 'bloom_level' in summary:
+                char_text += f"  • Уровень Блума: {summary['bloom_level']}\n"
+            
+            characteristics.append(char_text)
+        
+        return "\n".join(characteristics)
+    
+    
+    def _convert_summaries_to_legacy_format(self, evaluation_summaries: List[Dict]) -> List[Dict]:
+        """
+        Конвертирует evaluation_summaries в legacy формат для совместимости
+        НО БЕЗ текстов ответов для сохранения приватности
+        
+        Args:
+            evaluation_summaries: Характеристики от EvaluationAgent
+            
+        Returns:
+            Legacy формат (без текстов ответов)
+        """
+        legacy_format = []
+        
+        for summary in evaluation_summaries:
+            legacy_item = {
+                'score': summary.get('total_score', 0),
+                'bloom_level': summary.get('bloom_level', 'unknown'),
+                'criteria_scores': summary.get('criteria_scores', {}),
+                'strengths': summary.get('strengths', ''),
+                'weaknesses': summary.get('weaknesses', ''),
+                # НЕ ВКЛЮЧАЕМ: 'answer_text' для сохранения приватности
+                'evaluation_metadata': {
+                    'timestamp': summary.get('timestamp'),
+                    'question_type': summary.get('question_type')
+                }
+            }
+            legacy_format.append(legacy_item)
+        
+        return legacy_format
+    
+    def _parse_theme_guided_question(self, response: str, requirements: Dict) -> Dict[str, str]:
+        """Парсит вопрос, сгенерированный на основе требований ThemeAgent"""
+        question_match = re.search(r'ВОПРОС:\s*(.+?)(?=\n|$)', response, re.DOTALL)
+        key_points_match = re.search(r'КЛЮЧЕВЫЕ_МОМЕНТЫ:\s*(.+?)(?=\n|$)', response)
+        bloom_level_match = re.search(r'УРОВЕНЬ_БЛУМА:\s*(.+?)(?=\n|$)', response)
+        direction_match = re.search(r'ТЕМАТИЧЕСКОЕ_НАПРАВЛЕНИЕ:\s*(.+?)(?=\n|$)', response)
+        process_match = re.search(r'КОГНИТИВНЫЙ_ПРОЦЕСС:\s*(.+?)(?=\n|$)', response)
+        criteria_match = re.search(r'КРИТЕРИИ_ОЦЕНКИ:\s*(.+?)(?=\n|$)', response, re.DOTALL)
+        adaptation_match = re.search(r'АДАПТАЦИЯ:\s*(.+?)(?=\n|$)', response, re.DOTALL)
+        
+        return {
+            'question': question_match.group(1).strip() if question_match else "Вопрос не найден",
+            'key_points': key_points_match.group(1).strip() if key_points_match else "",
+            'topic_level': self._map_bloom_to_topic_level(requirements.get('bloom_level', 'remember')),
+            'bloom_level': requirements.get('bloom_level', 'remember'),
+            'bloom_level_name': requirements.get('level_name', 'Не указан'),
+            'thematic_direction': direction_match.group(1).strip() if direction_match else "",
+            'cognitive_process': process_match.group(1).strip() if process_match else "",
+            'evaluation_criteria': criteria_match.group(1).strip() if criteria_match else "",
+            'adaptation_notes': adaptation_match.group(1).strip() if adaptation_match else "",
+            'theme_requirements': requirements,
+            'raw_response': response
+        }
+    
     def _map_bloom_to_topic_level(self, bloom_level: str) -> str:
         """Преобразует уровень Блума в уровень темы"""
         mapping = {
@@ -581,11 +484,7 @@ class QuestionAgentLangGraph(LangGraphAgentBase):
         }
         return mapping.get(bloom_level, 'базовый')
     
-    def get_question_history(self) -> List[Dict]:
-        """Возвращает историю заданных вопросов"""
-        return getattr(self, 'question_history', []).copy()
-    
-    def get_theme_progress(self) -> Dict[str, Any]:
+    def get_theme_progress(self) -> Dict[str, any]:
         """Возвращает прогресс по тематической структуре"""
         if not self.theme_structure:
             return {'error': 'Тематическая структура не загружена'}
@@ -648,33 +547,6 @@ class QuestionAgentLangGraph(LangGraphAgentBase):
     
     def reset_history(self):
         """Сбрасывает историю вопросов"""
-        if hasattr(self, 'question_history'):
-            self.question_history = []
+        self.question_history = []
+        self.answer_history = []
         self.current_theme_position = 0
-        super().reset_history()
-
-
-# Функция для создания QuestionAgent на LangGraph
-def create_question_agent(
-    subject: str = "Общие знания",
-    difficulty: str = "средний",
-    topic_context: str = None,
-    theme_structure: dict = None
-) -> QuestionAgentLangGraph:
-    """Создает экземпляр QuestionAgent на LangGraph"""
-    return QuestionAgentLangGraph(
-        subject=subject,
-        difficulty=difficulty,
-        topic_context=topic_context,
-        theme_structure=theme_structure
-    )
-
-# Псевдоним для обратной совместимости
-def create_question_agent_langgraph(
-    subject: str = "Общие знания",
-    difficulty: str = "средний",
-    topic_context: str = None,
-    theme_structure: dict = None
-) -> QuestionAgentLangGraph:
-    """Создает экземпляр QuestionAgent на LangGraph (псевдоним для обратной совместимости)"""
-    return create_question_agent(subject, difficulty, topic_context, theme_structure)
