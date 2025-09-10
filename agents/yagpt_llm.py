@@ -108,6 +108,8 @@ class YandexGPT(LLM):
     
     def _call_with_http(self, prompt: str, **kwargs) -> str:
         """Fallback к HTTP API если SDK недоступен"""
+        print("🔍 [YandexGPT HTTP] Подготовка HTTP запроса к API...")
+        
         url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
         
         headers = {
@@ -134,11 +136,21 @@ class YandexGPT(LLM):
             ]
         }
         
+        print(f"🔍 [YandexGPT HTTP] URL: {url}")
+        print(f"🔍 [YandexGPT HTTP] ModelUri: gpt://{self.folder_id}/{self.model_id}")
+        print(f"🔍 [YandexGPT HTTP] Temperature: {temperature}, MaxTokens: {max_tokens}")
+        print("🔍 [YandexGPT HTTP] Отправка POST запроса...")
+        
         response = requests.post(url, headers=headers, json=payload, timeout=30)
+        print(f"🔍 [YandexGPT HTTP] Получен статус ответа: {response.status_code}")
+        
         response.raise_for_status()
         
         result = response.json()
-        return result["result"]["alternatives"][0]["message"]["text"]
+        text_result = result["result"]["alternatives"][0]["message"]["text"]
+        print(f"✅ [YandexGPT HTTP] Успешно получен текст длиной {len(text_result)} символов")
+        
+        return text_result
     
     def _call(
         self,
@@ -149,25 +161,41 @@ class YandexGPT(LLM):
     ) -> str:
         """Вызов YandexGPT API"""
         
+        print(f"🔍 [YandexGPT] Начало API вызова (запрос #{self.request_count + 1})")
+        print(f"🔍 [YandexGPT] Длина промпта: {len(prompt)} символов")
+        print(f"🔍 [YandexGPT] Промпт: {prompt[:200]}...")
+        
         try:
+            # Проверяем credentials перед вызовом
+            if not self.api_key:
+                raise ValueError("API ключ Yandex не установлен")
+            if not self.folder_id:
+                raise ValueError("Folder ID Yandex не установлен")
+            
             # Обновляем метаданные
             self.request_count += 1
             self.last_request_time = datetime.now()
             
             # Пытаемся использовать SDK, если доступен
             if YANDEX_SDK_AVAILABLE:
+                print("🔍 [YandexGPT] Использование YandexCloudML SDK...")
                 text_result = self._call_with_sdk(prompt, **kwargs)
             else:
+                print("🔍 [YandexGPT] Использование HTTP API fallback...")
                 text_result = self._call_with_http(prompt, **kwargs)
             
             # Примерная оценка токенов
             estimated_tokens = len(text_result.split()) * 1.3
             self.total_tokens += int(estimated_tokens)
             
+            print(f"✅ [YandexGPT] API вызов успешен. Получено {len(text_result)} символов")
+            print(f"✅ [YandexGPT] Ответ: {text_result[:200]}...")
+            
             return text_result
             
         except Exception as e:
             error_msg = f"Ошибка YandexGPT: {str(e)}"
+            print(f"❌ [YandexGPT] {error_msg}")
             if run_manager:
                 run_manager.on_llm_error(Exception(error_msg))
             return error_msg
@@ -476,11 +504,26 @@ def create_yandex_llm(
     model_id: str = None
 ) -> YandexGPT:
     """Создает экземпляр YandexGPT LLM"""
-    return YandexGPT(
+    print("🔍 [YandexGPT] Создание экземпляра YandexGPT LLM...")
+    
+    # Проверяем переменные окружения
+    api_key = os.getenv("YANDEX_API_KEY", "")
+    folder_id = os.getenv("YANDEX_FOLDER_ID", "")
+    model = model_id or os.getenv("YANDEX_MODEL_ID", "yandexgpt")
+    
+    print(f"🔍 [YandexGPT] API ключ: {'✅ установлен' if api_key else '❌ отсутствует'}")
+    print(f"🔍 [YandexGPT] Folder ID: {'✅ установлен' if folder_id else '❌ отсутствует'}")
+    print(f"🔍 [YandexGPT] Модель: {model}")
+    print(f"🔍 [YandexGPT] SDK доступен: {'✅ да' if YANDEX_SDK_AVAILABLE else '❌ нет'}")
+    
+    llm = YandexGPT(
         temperature=temperature,
         max_tokens=max_tokens,
-        model_id=model_id or os.getenv("YANDEX_MODEL_ID", "yandexgpt")
+        model_id=model
     )
+    
+    print("✅ [YandexGPT] Экземпляр LLM создан")
+    return llm
 
 def create_yandex_chat(
     temperature: float = 0.7,

@@ -19,16 +19,24 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
     """Агент для объективной изолированной оценки ответов на LangGraph"""
     
     def __init__(self, subject: str = "Общие знания", topic_context: str = None):
-        # print("[EvaluationAgent] __init__ вызван с subject:", subject)
+        print(f"🔍 [EvaluationAgent] Инициализация агента оценки для предмета: {subject}")
         super().__init__(subject, topic_context)
+        
+        print("🔍 [EvaluationAgent] Создание YandexGPT LLM...")
         self.llm = create_yandex_llm()
+        print("✅ [EvaluationAgent] YandexGPT LLM создан")
+        
         self.evaluation_history = []
         
+        print("🔍 [EvaluationAgent] Создание LangGraph состояний...")
         # Создаем граф состояний
         self.graph = self._create_evaluation_graph()
         self.app = self.graph.compile()
+        print("✅ [EvaluationAgent] LangGraph граф создан и скомпилирован")
         
+        print("🔍 [EvaluationAgent] Настройка промптов...")
         self._setup_prompts()
+        print("✅ [EvaluationAgent] Агент полностью инициализирован")
     
     def _setup_prompts(self):
         """Настройка промптов для оценки"""
@@ -330,8 +338,9 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
             return state
     
     def _parse_detailed_evaluation(self, response: str) -> Dict[str, Any]:
-        """Парсит детальную оценку"""
+        """Исправленный парсинг детальной оценки с проверкой согласованности"""
         # print("[EvaluationAgent] _parse_detailed_evaluation вызван")
+        
         # Извлечение оценок по критериям
         correctness_match = re.search(r'ПРАВИЛЬНОСТЬ:\s*(\d+)/10\s*-\s*(.+?)(?=\n|$)', response)
         completeness_match = re.search(r'ПОЛНОТА:\s*(\d+)/10\s*-\s*(.+?)(?=\n|$)', response)
@@ -344,25 +353,48 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
         strengths_match = re.search(r'СИЛЬНЫЕ_СТОРОНЫ:\s*(.+?)(?=\nСЛАБЫЕ_СТОРОНЫ:|$)', response, re.DOTALL)
         weaknesses_match = re.search(r'СЛАБЫЕ_СТОРОНЫ:\s*(.+?)(?=\n|$)', response, re.DOTALL)
         
-        # Вычисление общего балла (только из 3 критериев)
-        scores = []
-        if correctness_match:
-            scores.append(int(correctness_match.group(1)))
-        if completeness_match:
-            scores.append(int(completeness_match.group(1)))
-        if understanding_match:
-            scores.append(int(understanding_match.group(1)))
+        # Извлекаем оценки по критериям
+        correctness_score = int(correctness_match.group(1)) if correctness_match else 0
+        completeness_score = int(completeness_match.group(1)) if completeness_match else 0
+        understanding_score = int(understanding_match.group(1)) if understanding_match else 0
         
-        calculated_score = sum(scores) / len(scores) if scores else 0
-        final_score = float(total_score_match.group(1)) if total_score_match else calculated_score
+        # ИСПРАВЛЕНИЕ: используем среднее арифметическое критериев как основу
+        criteria_scores = [correctness_score, completeness_score, understanding_score]
+        calculated_score = sum(criteria_scores) / len(criteria_scores) if criteria_scores else 0
         
-        return {
+        # Проверяем согласованность с ИТОГОВАЯ_ОЦЕНКА
+        llm_final_score = float(total_score_match.group(1)) if total_score_match else None
+        
+        # ЛОГИКА ВЫБОРА ФИНАЛЬНОЙ ОЦЕНКИ:
+        consistency_warning = None
+        
+        if llm_final_score is not None:
+            # Если разница между LLM оценкой и расчетной больше 2 баллов, используем расчетную
+            score_difference = abs(llm_final_score - calculated_score)
+            if score_difference > 2.0:
+                print(f"⚠️ Большая разница в оценках: LLM={llm_final_score}, Расчетная={calculated_score:.1f}. Используем расчетную.")
+                final_score = calculated_score
+                consistency_warning = f"Обнаружено несоответствие: LLM оценка {llm_final_score}, расчетная {calculated_score:.1f}"
+            else:
+                # Используем среднее между LLM и расчетной оценкой для более справедливого результата
+                final_score = (llm_final_score + calculated_score) / 2
+        else:
+            # Если LLM не предоставил итоговую оценку, используем расчетную
+            final_score = calculated_score
+        
+        # Дополнительная проверка: если все критерии 0, но итоговая оценка > 0
+        if all(score == 0 for score in criteria_scores) and final_score > 0:
+            print(f"⚠️ Все критерии 0, но итоговая оценка {final_score}. Исправляем на 0.")
+            final_score = 0
+            consistency_warning = "Все критерии оценены в 0 баллов, итоговая оценка скорректирована"
+        
+        result = {
             'type': 'detailed',
             'total_score': round(final_score, 1),
             'criteria_scores': {
-                'correctness': int(correctness_match.group(1)) if correctness_match else 0,
-                'completeness': int(completeness_match.group(1)) if completeness_match else 0,
-                'understanding': int(understanding_match.group(1)) if understanding_match else 0
+                'correctness': correctness_score,
+                'completeness': completeness_score,
+                'understanding': understanding_score
             },
             'criteria_feedback': {
                 'correctness': correctness_match.group(2).strip() if correctness_match else "",
@@ -372,8 +404,16 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
             'detailed_feedback': feedback_match.group(1).strip() if feedback_match else "",
             'strengths': strengths_match.group(1).strip() if strengths_match else "",
             'weaknesses': weaknesses_match.group(1).strip() if weaknesses_match else "",
-            'raw_response': response
+            'raw_response': response,
+            'evaluation_metadata': {
+                'calculated_score': round(calculated_score, 1),
+                'llm_final_score': llm_final_score,
+                'consistency_warning': consistency_warning,
+                'score_method': 'criteria_average' if llm_final_score is None else 'weighted_average'
+            }
         }
+        
+        return result
     
     
     def _categorize_score(self, score: float) -> str:
@@ -558,11 +598,13 @@ def create_evaluation_agent(
     topic_context: str = None
 ) -> EvaluationAgentLangGraph:
     """Создает экземпляр EvaluationAgent на LangGraph"""
-    # print("[EvaluationAgent] create_evaluation_agent вызван")
-    return EvaluationAgentLangGraph(
+    print(f"🔍 [create_evaluation_agent] Создание EvaluationAgent для '{subject}'")
+    agent = EvaluationAgentLangGraph(
         subject=subject,
         topic_context=topic_context
     )
+    print("✅ [create_evaluation_agent] EvaluationAgent создан успешно")
+    return agent
 
 # Псевдоним для обратной совместимости
 def create_evaluation_agent_langgraph(

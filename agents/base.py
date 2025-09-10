@@ -180,10 +180,12 @@ class LangGraphAgentBase:
     """Базовый класс для всех LangGraph агентов"""
     
     def __init__(self, subject: str = "Общие знания", topic_context: str = None):
+        print(f"🔍 [BaseAgent] Инициализация {self.__class__.__name__} для предмета: {subject}")
         self.subject = subject
         self.topic_context = topic_context or f"Общий экзамен по предмету {subject}"
         self.agent_id = f"{self.__class__.__name__}_{uuid.uuid4().hex[:8]}"
         self.history = []
+        print(f"✅ [BaseAgent] {self.__class__.__name__} базовая инициализация завершена (ID: {self.agent_id})")
     
     def log_operation(self, operation: str, input_data: Any, output_data: Any, error: Optional[str] = None):
         """Логирует операцию агента"""

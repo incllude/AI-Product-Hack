@@ -20,17 +20,26 @@ class QuestionAgentLangGraph(LangGraphAgentBase):
     
     def __init__(self, subject: str = "Общие знания", difficulty: str = "средний", 
                  topic_context: str = None, theme_structure: dict = None):
+        print(f"🔍 [QuestionAgent] Инициализация агента для предмета: {subject}")
         super().__init__(subject, topic_context)
         self.difficulty = difficulty
         self.theme_structure = theme_structure
+        
+        print("🔍 [QuestionAgent] Создание YandexGPT LLM...")
         self.llm = create_yandex_llm()
+        print("✅ [QuestionAgent] YandexGPT LLM создан")
+        
         self.current_theme_position = 0
         
+        print("🔍 [QuestionAgent] Создание LangGraph состояний...")
         # Создаем граф состояний
         self.graph = self._create_question_graph()
         self.app = self.graph.compile()
+        print("✅ [QuestionAgent] LangGraph граф создан и скомпилирован")
         
+        print("🔍 [QuestionAgent] Настройка промптов...")
         self._setup_prompts()
+        print("✅ [QuestionAgent] Агент полностью инициализирован")
     
     def _setup_prompts(self):
         """Настройка промптов для генерации вопросов"""
@@ -192,6 +201,7 @@ class QuestionAgentLangGraph(LangGraphAgentBase):
     
     def _determine_question_type(self, state: QuestionState) -> QuestionState:
         """Определяет тип вопроса для генерации"""
+        print(f"🔍 [QuestionAgent] Определение типа вопроса для вопроса #{state['question_number']}")
         try:
             # Логируем операцию
             self.log_operation("determine_question_type", state, None)
@@ -199,19 +209,24 @@ class QuestionAgentLangGraph(LangGraphAgentBase):
             # Если есть тематическая структура, используем её
             if self.theme_structure:
                 state["question_type"] = "theme_guided"
+                print("✅ [QuestionAgent] Выбран тип: theme_guided")
                 return state
             
             # Если это первый вопрос
             if state["question_number"] == 1 or not state.get("evaluation_summaries"):
                 state["question_type"] = "initial"
+                print("✅ [QuestionAgent] Выбран тип: initial")
                 return state
             
             # Иначе используем контекстный подход
             state["question_type"] = "contextual"
+            print("✅ [QuestionAgent] Выбран тип: contextual")
             return state
             
         except Exception as e:
-            state["error"] = f"Ошибка определения типа вопроса: {str(e)}"
+            error_msg = f"Ошибка определения типа вопроса: {str(e)}"
+            print(f"❌ [QuestionAgent] {error_msg}")
+            state["error"] = error_msg
             self.log_operation("determine_question_type", state, None, str(e))
             return state
     
@@ -224,21 +239,31 @@ class QuestionAgentLangGraph(LangGraphAgentBase):
     
     def _generate_initial_question_node(self, state: QuestionState) -> QuestionState:
         """Генерирует первый вопрос"""
+        print(f"🔍 [QuestionAgent] Генерация первого вопроса для предмета: {self.subject}")
         try:
+            print("🔍 [QuestionAgent] Создание цепочки промпт → LLM → парсер...")
             chain = self.initial_question_prompt | self.llm | StrOutputParser()
             
-            response = chain.invoke({
+            print("🔍 [QuestionAgent] Подготовка данных для промпта...")
+            prompt_data = {
                 "subject": self.subject,
                 "difficulty": self.difficulty,
                 "topic_context": self.topic_context
-            })
+            }
+            print(f"🔍 [QuestionAgent] Данные промпта: {prompt_data}")
             
+            print("🔍 [QuestionAgent] Вызов YandexGPT API...")
+            response = chain.invoke(prompt_data)
+            
+            print(f"✅ [QuestionAgent] Получен ответ от YandexGPT: {response[:100]}...")
             state["raw_response"] = response
             self.log_operation("generate_initial_question", state, response)
             return state
             
         except Exception as e:
-            state["error"] = f"Ошибка генерации начального вопроса: {str(e)}"
+            error_msg = f"Ошибка генерации начального вопроса: {str(e)}"
+            print(f"❌ [QuestionAgent] {error_msg}")
+            state["error"] = error_msg
             self.log_operation("generate_initial_question", state, None, str(e))
             return state
     
@@ -424,7 +449,9 @@ class QuestionAgentLangGraph(LangGraphAgentBase):
         Returns:
             Словарь с вопросом и метаданными
         """
+        print(f"🔍 [QuestionAgent] Начало генерации вопроса #{question_number}")
         try:
+            print("🔍 [QuestionAgent] Создание начального состояния...")
             # Создаем начальное состояние
             initial_state = QuestionState(
                 question_number=question_number,
@@ -435,24 +462,31 @@ class QuestionAgentLangGraph(LangGraphAgentBase):
                 raw_response=None, # Добавляем отсутствующее поле
                 question_type=None # Добавляем отсутствующее поле
             )
+            print(f"✅ [QuestionAgent] Состояние создано: номер вопроса {question_number}")
             
+            print("🔍 [QuestionAgent] Запуск LangGraph workflow...")
             # Запускаем граф
             result = self.app.invoke(initial_state)
+            print("✅ [QuestionAgent] LangGraph workflow завершен")
             
             # Проверяем результат
             if result.get("error"):
+                error_msg = result["error"]
+                print(f"❌ [QuestionAgent] Ошибка в workflow: {error_msg}")
                 return {
-                    "error": result["error"],
+                    "error": error_msg,
                     "question": "Ошибка генерации вопроса",
                     "key_points": "",
                     "question_number": question_number,
                     "timestamp": datetime.now()
                 }
             
+            print(f"✅ [QuestionAgent] Вопрос #{question_number} успешно сгенерирован")
             return result.get("generated_question", {})
             
         except Exception as e:
             error_msg = f"Критическая ошибка в generate_question: {str(e)}"
+            print(f"❌ [QuestionAgent] {error_msg}")
             self.log_operation("generate_question", {"question_number": question_number}, None, error_msg)
             
             return {
@@ -662,12 +696,15 @@ def create_question_agent(
     theme_structure: dict = None
 ) -> QuestionAgentLangGraph:
     """Создает экземпляр QuestionAgent на LangGraph"""
-    return QuestionAgentLangGraph(
+    print(f"🔍 [create_question_agent] Создание QuestionAgent для '{subject}' сложности '{difficulty}'")
+    agent = QuestionAgentLangGraph(
         subject=subject,
         difficulty=difficulty,
         topic_context=topic_context,
         theme_structure=theme_structure
     )
+    print("✅ [create_question_agent] QuestionAgent создан успешно")
+    return agent
 
 # Псевдоним для обратной совместимости
 def create_question_agent_langgraph(

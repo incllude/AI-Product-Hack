@@ -17,8 +17,13 @@ class ThemeAgentLangGraph(LangGraphAgentBase):
     """Агент для создания тематической структуры экзамена с руководящими принципами для QuestionAgent на LangGraph"""
     
     def __init__(self, subject: str = "Общие знания", topic_context: str = None):
+        print(f"🔍 [ThemeAgent] Инициализация агента тематических структур для предмета: {subject}")
         super().__init__(subject, topic_context)
+        
+        print("🔍 [ThemeAgent] Создание YandexGPT LLM...")
         self.llm = create_yandex_llm()
+        print("✅ [ThemeAgent] YandexGPT LLM создан")
+        
         self.generated_structures = []
         
         # Структура таксономии Блума (пересмотренная версия)

@@ -18,15 +18,24 @@ class DiagnosticAgentLangGraph(LangGraphAgentBase):
     """Агент для комплексной диагностики результатов экзамена на LangGraph"""
     
     def __init__(self, subject: str = "Общие знания", topic_context: str = None):
+        print(f"🔍 [DiagnosticAgent] Инициализация агента диагностики для предмета: {subject}")
         super().__init__(subject, topic_context)
+        
+        print("🔍 [DiagnosticAgent] Создание YandexGPT LLM...")
         self.llm = create_yandex_llm()
+        print("✅ [DiagnosticAgent] YandexGPT LLM создан")
+        
         self.diagnostic_history = []
         
+        print("🔍 [DiagnosticAgent] Создание LangGraph состояний...")
         # Создаем граф состояний
         self.graph = self._create_diagnostic_graph()
         self.app = self.graph.compile()
+        print("✅ [DiagnosticAgent] LangGraph граф создан и скомпилирован")
         
+        print("🔍 [DiagnosticAgent] Настройка промптов...")
         self._setup_prompts()
+        print("✅ [DiagnosticAgent] Агент полностью инициализирован")
     
     def _setup_prompts(self):
         """Настройка промптов для диагностики"""
@@ -572,6 +581,7 @@ class DiagnosticAgentLangGraph(LangGraphAgentBase):
         Returns:
             Диагностический отчет
         """
+        print(f"🔍 [DiagnosticAgent] Начало диагностики: {len(questions)} вопросов, {len(evaluations)} оценок")
         try:
             # Создаем начальное состояние
             initial_state = DiagnosticState(
@@ -581,23 +591,43 @@ class DiagnosticAgentLangGraph(LangGraphAgentBase):
                 error=None
             )
             
+            print("🔍 [DiagnosticAgent] Запуск LangGraph workflow для диагностики...")
             # Запускаем граф
             result = self.app.invoke(initial_state)
             
             # Проверяем результат
             if result.get("error"):
+                print(f"❌ [DiagnosticAgent] Ошибка в workflow: {result['error']}")
                 return {'error': result["error"]}
             
+            print("✅ [DiagnosticAgent] Диагностика завершена успешно")
             return result.get("diagnostic_result", {})
             
         except Exception as e:
             error_msg = f"Критическая ошибка в diagnose_exam_results: {str(e)}"
+            print(f"❌ [DiagnosticAgent] {error_msg}")
             self.log_operation("diagnose_exam_results", {
                 "questions_count": len(questions),
                 "evaluations_count": len(evaluations)
             }, None, error_msg)
             
             return {'error': error_msg}
+    
+    def run_diagnostics(self, questions: List[Dict], evaluations: List[Dict], 
+                       detailed_analysis: bool = True) -> Dict[str, Any]:
+        """
+        Алиас для diagnose_exam_results для обратной совместимости
+        
+        Args:
+            questions: Список вопросов с метаданными
+            evaluations: Список оценок ответов
+            detailed_analysis: Использовать детальный анализ
+            
+        Returns:
+            Диагностический отчет
+        """
+        print("🔍 [DiagnosticAgent] Вызван run_diagnostics (алиас для diagnose_exam_results)")
+        return self.diagnose_exam_results(questions, evaluations, detailed_analysis)
     
     def compare_with_benchmark(self, current_results: Dict, benchmark_data: Dict = None) -> Dict[str, Any]:
         """Сравнивает результаты с эталонными данными"""
@@ -687,10 +717,13 @@ def create_diagnostic_agent(
     topic_context: str = None
 ) -> DiagnosticAgentLangGraph:
     """Создает экземпляр DiagnosticAgent на LangGraph"""
-    return DiagnosticAgentLangGraph(
+    print(f"🔍 [create_diagnostic_agent] Создание DiagnosticAgent для '{subject}'")
+    agent = DiagnosticAgentLangGraph(
         subject=subject,
         topic_context=topic_context
     )
+    print("✅ [create_diagnostic_agent] DiagnosticAgent создан успешно")
+    return agent
 
 # Псевдоним для обратной совместимости
 def create_diagnostic_agent_langgraph(

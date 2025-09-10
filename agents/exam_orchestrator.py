@@ -544,3 +544,6 @@ def create_exam_orchestrator_langgraph(
 ) -> ExamOrchestratorLangGraph:
     """Создает экземпляр ExamOrchestrator на LangGraph (псевдоним для обратной совместимости)"""
     return create_exam_orchestrator(topic_info, max_questions, use_theme_structure)
+
+# Alias для совместимости с фронтендом
+ExamOrchestrator = ExamOrchestratorLangGraph
