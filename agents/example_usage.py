@@ -39,7 +39,6 @@ def main_example():
     topic_info = topic_manager.get_topic_selection()
     
     print(f"\n📚 Выбранная тема: {topic_info['name']}")
-    print(f"🎓 Предмет: {topic_info['subject']}")
     print(f"📝 Описание: {topic_info['description']}")
     print(f"⚙️  Сложность: {topic_info['difficulty']}")
     
@@ -69,7 +68,7 @@ def simulate_langgraph_exam(orchestrator, topic_info: dict, use_real_llm: bool =
             "List comprehension - это способ создания списков в одну строку. Например: [x*2 for x in range(5)] создаст [0, 2, 4, 6, 8]",
             "Вложенные циклы - это циклы внутри других циклов. Используются для работы с многомерными структурами данных, например матрицами."
         ]
-    elif "фотоэффект" in topic_info['name'].lower() or "физик" in topic_info['subject'].lower():
+    elif "фотоэффект" in topic_info['name'].lower():
         sample_answers = [
             "Фотоэффект - это явление испускания электронов веществом под действием света. Открыт Герцем, объяснен Эйнштейном через квантовую природу света.",
             "Уравнение Эйнштейна: E = hν = A + Ek, где hν - энергия фотона, A - работа выхода, Ek - кинетическая энергия электрона.",
@@ -252,7 +251,6 @@ def interactive_langgraph_exam():
     topic_info = topic_manager.get_topic_selection()
     
     print(f"\n📚 Выбранная тема: {topic_info['name']}")
-    print(f"🎓 Предмет: {topic_info['subject']}")
     print(f"📝 Описание: {topic_info['description']}")
     print(f"⚙️  Сложность: {topic_info['difficulty']}")
     
@@ -436,7 +434,6 @@ def demo_langgraph_agents():
     
     try:
         theme_agent = create_theme_agent(
-            subject=topic_info['subject'],
             topic_context=topic_context
         )
         
@@ -469,7 +466,6 @@ def demo_langgraph_agents():
     
     try:
         question_agent = create_question_agent(
-            subject=topic_info['subject'],
             difficulty=topic_info['difficulty'],
             topic_context=topic_context
         )
@@ -500,7 +496,6 @@ def demo_langgraph_agents():
     
     try:
         evaluation_agent = create_evaluation_agent(
-            subject=topic_info['subject'],
             topic_context=topic_context
         )
         
@@ -535,7 +530,6 @@ def demo_langgraph_agents():
     
     try:
         diagnostic_agent = create_diagnostic_agent(
-            subject=topic_info['subject'],
             topic_context=topic_context
         )
         

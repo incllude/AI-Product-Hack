@@ -18,9 +18,9 @@ from datetime import datetime
 class EvaluationAgentLangGraph(LangGraphAgentBase):
     """Агент для объективной изолированной оценки ответов на LangGraph"""
     
-    def __init__(self, subject: str = "Общие знания", topic_context: str = None):
-        print(f"🔍 [EvaluationAgent] Инициализация агента оценки для предмета: {subject}")
-        super().__init__(subject, topic_context)
+    def __init__(self, topic_context: str = None):
+        print(f"🔍 [EvaluationAgent] Инициализация агента оценки")
+        super().__init__(topic_context)
         
         print("🔍 [EvaluationAgent] Создание YandexGPT LLM...")
         self.llm = create_yandex_llm()
@@ -44,9 +44,9 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
         
         # Основной промпт для оценки ответа
         self.evaluation_prompt = PromptTemplate(
-            input_variables=["subject", "topic_context", "question", "student_answer", "key_points", "topic_level"],
+            input_variables=["topic_context", "question", "student_answer", "key_points", "topic_level"],
             template="""
-Ты строгий и объективный экзаменатор по предмету "{subject}".
+Ты строгий и объективный экзаменатор.
 
 {topic_context}
 
@@ -213,7 +213,6 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
             chain = self.evaluation_prompt | self.llm | StrOutputParser()
             
             response = chain.invoke({
-                "subject": self.subject,
                 "topic_context": self.topic_context,
                 "question": state["question"],
                 "student_answer": state["student_answer"],
@@ -605,13 +604,11 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
 
 # Функция для создания EvaluationAgent на LangGraph
 def create_evaluation_agent(
-    subject: str = "Общие знания",
     topic_context: str = None
 ) -> EvaluationAgentLangGraph:
     """Создает экземпляр EvaluationAgent на LangGraph"""
-    print(f"🔍 [create_evaluation_agent] Создание EvaluationAgent для '{subject}'")
+    print(f"🔍 [create_evaluation_agent] Создание EvaluationAgent")
     agent = EvaluationAgentLangGraph(
-        subject=subject,
         topic_context=topic_context
     )
     print("✅ [create_evaluation_agent] EvaluationAgent создан успешно")
@@ -619,11 +616,10 @@ def create_evaluation_agent(
 
 # Псевдоним для обратной совместимости
 def create_evaluation_agent_langgraph(
-    subject: str = "Общие знания",
     topic_context: str = None
 ) -> EvaluationAgentLangGraph:
     """Создает экземпляр EvaluationAgent на LangGraph (псевдоним для обратной совместимости)"""
     # print("[EvaluationAgent] create_evaluation_agent_langgraph вызван")
-    return create_evaluation_agent(subject, topic_context)
+    return create_evaluation_agent(topic_context)
 
 # print("[EvaluationAgent] Модуль evaluation_agent.py загружен успешно!")

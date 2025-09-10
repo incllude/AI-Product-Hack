@@ -27,7 +27,6 @@ class ExamOrchestratorLangGraph:
             topic_info = topic_manager._get_default_topic()
         
         self.topic_info = topic_info
-        self.subject = topic_info['subject']
         self.difficulty = topic_info['difficulty']
         self.max_questions = max_questions
         self.use_theme_structure = use_theme_structure
@@ -57,7 +56,7 @@ class ExamOrchestratorLangGraph:
             # Создаем новую сессию
             self.current_session = ExamSession(
                 student_name=student_name,
-                subject=self.subject,
+                subject="Общие знания",  # Default value since self.subject is removed
                 difficulty=self.difficulty,
                 topic_context=self.workflow.topic_context,
                 max_questions=self.max_questions,
@@ -82,7 +81,7 @@ class ExamOrchestratorLangGraph:
             return {
                 'session_id': self.current_session.session_id,
                 'message': f"Экзамен начат для {student_name}",
-                'subject': self.subject,
+                'subject': "Общие знания",  # Default value since self.subject is removed
                 'difficulty': self.difficulty,
                 'max_questions': self.max_questions,
                 'use_theme_structure': self.use_theme_structure,
@@ -381,7 +380,7 @@ class ExamOrchestratorLangGraph:
         
         summary = {
             'student': self.current_session.student_name,
-            'subject': self.subject,
+            'subject': "Общие знания",  # Default value since self.subject is removed
             'difficulty': self.difficulty,
             'duration': self._calculate_duration(),
             'total_score': f"{progress['current_score']}/{progress['max_possible_score']}",
@@ -427,7 +426,7 @@ class ExamOrchestratorLangGraph:
         session_info = {
             'session_id': self.current_session.session_id,
             'student_name': self.current_session.student_name,
-            'subject': self.subject,
+            'subject': "Общие знания",  # Default value since self.subject is removed
             'difficulty': self.difficulty,
             'status': self.current_session.status,
             'start_time': self.current_session.start_time.isoformat() if self.current_session.start_time else None,

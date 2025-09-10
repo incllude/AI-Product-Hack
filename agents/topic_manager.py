@@ -126,7 +126,6 @@ class TopicManager:
                         'type': 'predefined',
                         'key': selected_key,
                         'name': topic_info['name'],
-                        'subject': topic_info['subject'],
                         'description': topic_info['description'],
                         'difficulty': difficulty,
                         'key_concepts': topic_info['key_concepts']
@@ -207,7 +206,6 @@ class TopicManager:
             'type': 'predefined',
             'key': default_key,
             'name': topic_info['name'],
-            'subject': topic_info['subject'],
             'description': topic_info['description'],
             'difficulty': "средний",
             'key_concepts': topic_info['key_concepts']
@@ -224,7 +222,6 @@ class TopicManager:
             Текстовый контекст для промптов
         """
         context = f"ТЕМА ЭКЗАМЕНА: {topic_info['name']}\n"
-        context += f"ПРЕДМЕТ: {topic_info['subject']}\n"
         context += f"ОПИСАНИЕ: {topic_info['description']}\n"
         context += f"УРОВЕНЬ СЛОЖНОСТИ: {topic_info['difficulty']}\n"
         
@@ -286,7 +283,7 @@ class TopicManager:
         Returns:
             True если тема валидна
         """
-        required_fields = ['name', 'subject', 'difficulty']
+        required_fields = ['name', 'difficulty']
         
         for field in required_fields:
             if field not in topic_info or not topic_info[field]:

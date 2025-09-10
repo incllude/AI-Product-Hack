@@ -18,10 +18,10 @@ from datetime import datetime
 class QuestionAgentLangGraph(LangGraphAgentBase):
     """Агент для генерации вопросов с использованием LangGraph"""
     
-    def __init__(self, subject: str = "Общие знания", difficulty: str = "средний", 
+    def __init__(self, difficulty: str = "средний", 
                  topic_context: str = None, theme_structure: dict = None):
-        print(f"🔍 [QuestionAgent] Инициализация агента для предмета: {subject}")
-        super().__init__(subject, topic_context)
+        print(f"🔍 [QuestionAgent] Инициализация агента")
+        super().__init__(topic_context)
         self.difficulty = difficulty
         self.theme_structure = theme_structure
         
@@ -46,9 +46,9 @@ class QuestionAgentLangGraph(LangGraphAgentBase):
         
         # Промпт для первого вопроса
         self.initial_question_prompt = PromptTemplate(
-            input_variables=["subject", "difficulty", "topic_context"],
+            input_variables=["difficulty", "topic_context"],
             template="""
-Ты эксперт-экзаменатор по предмету "{subject}".
+Ты эксперт-экзаменатор.
 
 {topic_context}
 
@@ -73,10 +73,10 @@ class QuestionAgentLangGraph(LangGraphAgentBase):
         
         # Промпт для последующих вопросов с учетом контекста
         self.contextual_question_prompt = PromptTemplate(
-            input_variables=["subject", "difficulty", "question_number", "topic_context", 
+            input_variables=["difficulty", "question_number", "topic_context", 
                            "previous_questions", "evaluation_characteristics"],
             template="""
-Ты эксперт-экзаменатор по предмету "{subject}".
+Ты эксперт-экзаменатор.
 
 {topic_context}
 
@@ -111,10 +111,10 @@ class QuestionAgentLangGraph(LangGraphAgentBase):
         
         # Промпт для генерации вопросов на основе руководящих принципов ThemeAgent
         self.theme_guided_question_prompt = PromptTemplate(
-            input_variables=["subject", "topic_context", "difficulty", "question_requirements", 
+            input_variables=["topic_context", "difficulty", "question_requirements", 
                            "evaluation_characteristics"],
             template="""
-Ты эксперт-экзаменатор по предмету "{subject}".
+Ты эксперт-экзаменатор.
 
 КОНТЕКСТ ТЕМЫ:
 {topic_context}
@@ -239,14 +239,13 @@ class QuestionAgentLangGraph(LangGraphAgentBase):
     
     def _generate_initial_question_node(self, state: QuestionState) -> QuestionState:
         """Генерирует первый вопрос"""
-        print(f"🔍 [QuestionAgent] Генерация первого вопроса для предмета: {self.subject}")
+        print(f"🔍 [QuestionAgent] Генерация первого вопроса")
         try:
             print("🔍 [QuestionAgent] Создание цепочки промпт → LLM → парсер...")
             chain = self.initial_question_prompt | self.llm | StrOutputParser()
             
             print("🔍 [QuestionAgent] Подготовка данных для промпта...")
             prompt_data = {
-                "subject": self.subject,
                 "difficulty": self.difficulty,
                 "topic_context": self.topic_context
             }
@@ -281,7 +280,6 @@ class QuestionAgentLangGraph(LangGraphAgentBase):
             chain = self.contextual_question_prompt | self.llm | StrOutputParser()
             
             response = chain.invoke({
-                "subject": self.subject,
                 "difficulty": self.difficulty,
                 "question_number": state["question_number"],
                 "topic_context": self.topic_context,
@@ -317,7 +315,6 @@ class QuestionAgentLangGraph(LangGraphAgentBase):
             chain = self.theme_guided_question_prompt | self.llm | StrOutputParser()
             
             response = chain.invoke({
-                "subject": self.subject,
                 "topic_context": self.topic_context,
                 "difficulty": self.difficulty,
                 "question_requirements": requirements_text,
@@ -690,15 +687,13 @@ class QuestionAgentLangGraph(LangGraphAgentBase):
 
 # Функция для создания QuestionAgent на LangGraph
 def create_question_agent(
-    subject: str = "Общие знания",
     difficulty: str = "средний",
     topic_context: str = None,
     theme_structure: dict = None
 ) -> QuestionAgentLangGraph:
     """Создает экземпляр QuestionAgent на LangGraph"""
-    print(f"🔍 [create_question_agent] Создание QuestionAgent для '{subject}' сложности '{difficulty}'")
+    print(f"🔍 [create_question_agent] Создание QuestionAgent сложности '{difficulty}'")
     agent = QuestionAgentLangGraph(
-        subject=subject,
         difficulty=difficulty,
         topic_context=topic_context,
         theme_structure=theme_structure
@@ -708,11 +703,10 @@ def create_question_agent(
 
 # Псевдоним для обратной совместимости
 def create_question_agent_langgraph(
-    subject: str = "Общие знания",
     difficulty: str = "средний",
     topic_context: str = None,
     theme_structure: dict = None
 ) -> QuestionAgentLangGraph:
     """Создает экземпляр QuestionAgent на LangGraph (псевдоним для обратной совместимости)"""
-    return create_question_agent(subject, difficulty, topic_context, theme_structure)
+    return create_question_agent(difficulty, topic_context, theme_structure)
 

@@ -16,9 +16,9 @@ from datetime import datetime
 class ThemeAgentLangGraph(LangGraphAgentBase):
     """Агент для создания тематической структуры экзамена с руководящими принципами для QuestionAgent на LangGraph"""
     
-    def __init__(self, subject: str = "Общие знания", topic_context: str = None):
-        print(f"🔍 [ThemeAgent] Инициализация агента тематических структур для предмета: {subject}")
-        super().__init__(subject, topic_context)
+    def __init__(self, topic_context: str = None):
+        print(f"🔍 [ThemeAgent] Инициализация агента тематических структур")
+        super().__init__(topic_context)
         
         print("🔍 [ThemeAgent] Создание YandexGPT LLM...")
         self.llm = create_yandex_llm()
@@ -222,9 +222,7 @@ class ThemeAgentLangGraph(LangGraphAgentBase):
     def _validate_theme_input_node(self, state: ThemeState) -> ThemeState:
         """Валидирует входные данные для создания тематической структуры"""
         try:
-            if not state.get("subject"):
-                state["error"] = "Отсутствует предмет"
-                return state
+            # Subject field is no longer required - using topic_context instead
             
             if not state.get("topic_context"):
                 state["error"] = "Отсутствует контекст темы"
@@ -383,7 +381,6 @@ class ThemeAgentLangGraph(LangGraphAgentBase):
             
             theme_curriculum = {
                 'curriculum_id': curriculum_id,
-                'subject': state["subject"],
                 'topic_context': state["topic_context"],
                 'total_questions': state["total_questions"],
                 'difficulty': state["difficulty"],
@@ -614,7 +611,7 @@ class ThemeAgentLangGraph(LangGraphAgentBase):
         try:
             # Создаем начальное состояние
             initial_state = ThemeState(
-                subject=self.subject,
+                subject="Общие знания",  # Default value since subject is no longer used
                 topic_context=self.topic_context,
                 total_questions=total_questions,
                 difficulty=difficulty,
@@ -773,19 +770,16 @@ class ThemeAgentLangGraph(LangGraphAgentBase):
 
 # Функция для создания ThemeAgent на LangGraph
 def create_theme_agent(
-    subject: str = "Общие знания",
     topic_context: str = None
 ) -> ThemeAgentLangGraph:
     """Создает экземпляр ThemeAgent на LangGraph"""
     return ThemeAgentLangGraph(
-        subject=subject,
         topic_context=topic_context
     )
 
 # Псевдоним для обратной совместимости
 def create_theme_agent_langgraph(
-    subject: str = "Общие знания",
     topic_context: str = None
 ) -> ThemeAgentLangGraph:
     """Создает экземпляр ThemeAgent на LangGraph (псевдоним для обратной совместимости)"""
-    return create_theme_agent(subject, topic_context)
+    return create_theme_agent(topic_context)

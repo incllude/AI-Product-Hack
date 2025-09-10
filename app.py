@@ -1,6 +1,5 @@
 """
-Streamlit приложение-чатбот для интеллектуальной системы диагностики с LangGraph агентами
-Адаптированная версия с поддержкой логирования и совместимостью с LangGraph
+Streamlit приложение-чатбот для интеллектуальной системы диагностики
 """
 import streamlit as st
 import sys
@@ -25,7 +24,7 @@ from topic_manager import TopicManager
 USE_OPTIMIZED_VERSION = True
 
 class DialogLogger:
-    """Класс для логирования диалогов экзамена - совместимый с LangGraph"""
+    """Класс для логирования диалогов экзамена"""
     
     def __init__(self):
         self.logs_dir = os.path.join(os.path.dirname(__file__), 'logs', 'dialogs')
@@ -69,7 +68,7 @@ class DialogLogger:
                 "total_score": 0,
                 "max_possible_score": 0
             },
-            "langgraph_metadata": {  # Специфичные для LangGraph данные
+            "exam_metadata": {
                 "workflow_state": None,
                 "exam_session_id": None,
                 "theme_structure": None
@@ -96,11 +95,11 @@ class DialogLogger:
         self._save_log()
     
     def log_question(self, question_data):
-        """Логирование вопроса - адаптировано для LangGraph структуры"""
+        """Логирование вопроса"""
         if not self.dialog_data:
             return
         
-        # Адаптируем структуру вопроса из LangGraph формата
+        # Адаптируем структуру вопроса
         question_entry = {
             "timestamp": datetime.now().isoformat(),
             "question_number": question_data.get('question_number', 0),
@@ -126,7 +125,7 @@ class DialogLogger:
         self._save_log()
     
     def log_answer_and_evaluation(self, answer, evaluation_data):
-        """Логирование ответа и его оценки - адаптировано для LangGraph"""
+        """Логирование ответа и его оценки"""
         if not self.dialog_data or not self.dialog_data["questions_and_answers"]:
             return
         
@@ -138,7 +137,7 @@ class DialogLogger:
                     "content": answer
                 }
                 
-                # Адаптируем структуру оценки для LangGraph
+                # Адаптируем структуру оценки
                 qa_pair["evaluation"] = {
                     "timestamp": datetime.now().isoformat(),
                     "total_score": evaluation_data.get('total_score', 0),
@@ -181,12 +180,12 @@ class DialogLogger:
         
         self._save_log()
     
-    def log_langgraph_session(self, exam_session_id, workflow_state=None):
-        """Логирование специфичных для LangGraph данных"""
+    def log_exam_session(self, exam_session_id, workflow_state=None):
+        """Логирование данных экзаменационной сессии"""
         if not self.dialog_data:
             return
         
-        self.dialog_data["langgraph_metadata"]["exam_session_id"] = exam_session_id
+        self.dialog_data["exam_metadata"]["exam_session_id"] = exam_session_id
         if workflow_state:
             # Сериализуем только сериализуемые части состояния
             serializable_state = {
@@ -195,7 +194,7 @@ class DialogLogger:
                 "current_question_number": workflow_state.get("current_question_number"),
                 "max_questions": workflow_state.get("max_questions")
             }
-            self.dialog_data["langgraph_metadata"]["workflow_state"] = serializable_state
+            self.dialog_data["exam_metadata"]["workflow_state"] = serializable_state
         
         self._save_log()
     
@@ -260,7 +259,7 @@ class DialogLogger:
 
 # Конфигурация страницы
 st.set_page_config(
-    page_title="🎓 Скользящая диагностика (LangGraph)",
+    page_title="🎓 Скользящая диагностика",
     page_icon="🎓",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -427,7 +426,6 @@ def display_exam_history():
         
         with st.sidebar.expander(f"{status_emoji} {item['topic_name'][:20]}... ({time_str})"):
             st.write(f"**Студент:** {item['student_name']}")
-            st.write(f"**Предмет:** {item['subject']}")
             st.write(f"**Статус:** {item['status']}")
             st.write(f"**Вопросов:** {item['questions_count']}")
             if item['average_score'] > 0:
@@ -436,7 +434,7 @@ def display_exam_history():
             
             # Кнопка для просмотра детального лога (если понадобится в будущем)
             if st.button("📄 Подробнее", key=f"detail_{item['session_id']}", help="Просмотр детального лога"):
-                st.info("Функция просмотра детального лога будет добавлена в будущих версиях")
+                st.info("Функция просмотра детального лога будет добавлена позже")
     
     if len(history) > max_display:
         st.sidebar.caption(f"Показано {max_display} из {len(history)} записей")
@@ -445,7 +443,7 @@ def display_exam_history():
     if history:
         st.sidebar.markdown("---")
         if st.sidebar.button("🗂️ Управление историей", help="Просмотр и управление всей историей диагностик"):
-            st.sidebar.info("Функция управления историей будет добавлена в будущих версиях")
+            st.sidebar.info("Функция управления историей будет добавлена позже")
 
 def setup_exam_on_main():
     """Настройка экзамена на главном экране"""
@@ -461,8 +459,6 @@ def setup_exam_on_main():
     </div>
     """, unsafe_allow_html=True)
     
-    optimization_status = "⚡ Оптимизированная" if USE_OPTIMIZED_VERSION else "🔧 Стандартная"
-    st.caption(f"{optimization_status} версия: LangGraph агенты")
     
     # Имя студента
     student_name = st.text_input("Имя студента", value=st.session_state.student_name, key="main_student_name")
@@ -521,11 +517,6 @@ def setup_exam_on_main():
                 placeholder="Например: Квантовая физика"
             )
         
-            custom_subject = st.text_input(
-                "Предмет:",
-                placeholder="Например: Физика",
-                value="Общие знания"
-            )
         
             custom_description = st.text_area(
                 "Описание темы (необязательно):",
@@ -550,7 +541,7 @@ def setup_exam_on_main():
                 'type': 'custom',
                 'key': 'custom',
                 'name': custom_name if custom_name.strip() else "Пользовательская тема",
-                'subject': custom_subject if custom_subject.strip() else "Общие знания",
+                'subject': "Общие знания",
                 'description': custom_description if custom_description.strip() else f"Экзамен по теме: {custom_name if custom_name.strip() else 'Пользовательская тема'}",
                 'difficulty': 'средний',
                 'key_concepts': key_concepts
@@ -622,9 +613,9 @@ def setup_exam_on_main():
     return topic_info
 
 def start_exam(topic_info, max_questions, use_theme_structure):
-    """Запуск экзамена с LangGraph агентами"""
+    """Запуск экзамена"""
     # Показываем индикатор загрузки
-    with st.spinner("Инициализация экзамена (LangGraph)..."):
+    with st.spinner("Инициализация экзамена..."):
         try:
             # Инициализация логгера диалогов
             st.session_state.dialog_logger = DialogLogger()
@@ -635,7 +626,7 @@ def start_exam(topic_info, max_questions, use_theme_structure):
                 use_theme_structure
             )
             
-            # Создание оркестратора LangGraph (оптимизированного или обычного)
+            # Создание оркестратора экзамена
             if USE_OPTIMIZED_VERSION:
                 st.session_state.orchestrator = OptimizedExamOrchestrator(
                     topic_info=topic_info,
@@ -652,10 +643,10 @@ def start_exam(topic_info, max_questions, use_theme_structure):
             # Запуск экзамена
             session_info = st.session_state.orchestrator.start_exam(st.session_state.student_name)
             
-            # Логирование LangGraph session
+            # Логирование экзаменационной сессии
             if hasattr(st.session_state.orchestrator, 'current_session'):
                 exam_session_id = getattr(st.session_state.orchestrator.current_session, 'session_id', None)
-                st.session_state.dialog_logger.log_langgraph_session(exam_session_id)
+                st.session_state.dialog_logger.log_exam_session(exam_session_id)
             
             st.session_state.exam_started = True
             st.session_state.topic_selected = True
@@ -667,7 +658,6 @@ def start_exam(topic_info, max_questions, use_theme_structure):
             welcome_msg = f"""Добро пожаловать, {st.session_state.student_name}! 🎓
 
 **Тема:** {topic_info['name']}
-**Предмет:** {topic_info['subject']}
 **Вопросов:** {max_questions}
 **Режим:** {'Структурированный' if use_theme_structure else 'Быстрый'}
 
@@ -682,7 +672,7 @@ def start_exam(topic_info, max_questions, use_theme_structure):
     st.rerun()
 
 def get_next_question():
-    """Получение следующего вопроса от LangGraph агентов"""
+    """Получение следующего вопроса"""
     if not st.session_state.orchestrator:
         return
     
@@ -718,7 +708,7 @@ def get_next_question():
         st.error(f"Ошибка при получении вопроса: {str(e)}")
 
 def submit_answer(answer):
-    """Отправка ответа на оценку LangGraph агентам"""
+    """Отправка ответа на оценку"""
     if not st.session_state.orchestrator or not st.session_state.current_question:
         return
     
@@ -726,7 +716,7 @@ def submit_answer(answer):
     add_message("user", answer)
     
     # Показываем индикатор загрузки для оценки
-    with st.spinner("Оценка вашего ответа (LangGraph)..."):
+    with st.spinner("Оценка вашего ответа..."):
         try:
             # Отправляем ответ на оценку
             evaluation = st.session_state.orchestrator.submit_answer(answer)
@@ -818,7 +808,7 @@ def generate_final_report():
             if st.session_state.dialog_logger:
                 session_summary = st.session_state.dialog_logger.get_session_summary()
             
-            report_text = f"""🎉 **Экзамен завершен!** (LangGraph агенты)
+            report_text = f"""🎉 **Экзамен завершен!**
 
 **Итоговые результаты:**
 • Оценка: {final_report['grade_info']['grade'].upper()}
@@ -1434,9 +1424,6 @@ def main():
         """, unsafe_allow_html=True)
         
     st.title("🎓 Скользящая диагностика")
-    optimization_emoji = "⚡" if USE_OPTIMIZED_VERSION else "🔧"
-    optimization_text = "Оптимизированная версия" if USE_OPTIMIZED_VERSION else "Стандартная версия"
-    st.caption(f"{optimization_emoji} {optimization_text} - Powered by LangGraph агенты")
     
     if st.session_state.exam_started:
         st.markdown('</div>', unsafe_allow_html=True)
@@ -1461,7 +1448,7 @@ def main():
         Интеллектуальная система экзаменирования с адаптивными вопросами и детальным анализом ответов.
         
         **Технологии:**
-        - 🔧 **LangGraph агенты** - workflow-based архитектура
+        - 🔧 **Интеллектуальные агенты** - современная архитектура
         - 📊 Многокритериальная оценка
         - 💡 Персональные рекомендации
         - 📝 Детальное логирование сессий
@@ -1491,7 +1478,7 @@ def main():
         # Кнопка для генерации первого вопроса
         if st.session_state.exam_started and not st.session_state.get('first_question_generated', False) and not st.session_state.exam_completed:
             if st.button("🚀 Получить первый вопрос", type="primary"):
-                with st.spinner("Генерация первого вопроса (LangGraph)..."):
+                with st.spinner("Генерация первого вопроса..."):
                     get_next_question()
                     st.session_state.first_question_generated = True
                 st.rerun()

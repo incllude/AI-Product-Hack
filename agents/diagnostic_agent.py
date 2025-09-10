@@ -17,9 +17,9 @@ from datetime import datetime
 class DiagnosticAgentLangGraph(LangGraphAgentBase):
     """Агент для комплексной диагностики результатов экзамена на LangGraph"""
     
-    def __init__(self, subject: str = "Общие знания", topic_context: str = None):
-        print(f"🔍 [DiagnosticAgent] Инициализация агента диагностики для предмета: {subject}")
-        super().__init__(subject, topic_context)
+    def __init__(self, topic_context: str = None):
+        print(f"🔍 [DiagnosticAgent] Инициализация агента диагностики")
+        super().__init__(topic_context)
         
         print("🔍 [DiagnosticAgent] Создание YandexGPT LLM...")
         self.llm = create_yandex_llm()
@@ -42,9 +42,9 @@ class DiagnosticAgentLangGraph(LangGraphAgentBase):
         
         # Промпт для анализа паттернов ответов
         self.pattern_analysis_prompt = PromptTemplate(
-            input_variables=["subject", "topic_context", "questions_and_evaluations", "overall_stats"],
+            input_variables=["topic_context", "questions_and_evaluations", "overall_stats"],
             template="""
-Ты эксперт-диагност образовательного процесса по предмету "{subject}".
+Ты эксперт-диагност образовательного процесса.
 
 {topic_context}
 
@@ -78,9 +78,9 @@ class DiagnosticAgentLangGraph(LangGraphAgentBase):
         
         # Промпт для финального отчета
         self.final_report_prompt = PromptTemplate(
-            input_variables=["subject", "pattern_analysis", "total_score", "max_score", "grade_recommendation"],
+            input_variables=["pattern_analysis", "total_score", "max_score", "grade_recommendation"],
             template="""
-Составь итоговый диагностический отчет об экзамене студента по предмету "{subject}".
+Составь итоговый диагностический отчет об экзамене студента.
 
 АНАЛИЗ ПАТТЕРНОВ:
 {pattern_analysis}
@@ -259,7 +259,6 @@ class DiagnosticAgentLangGraph(LangGraphAgentBase):
             chain = self.pattern_analysis_prompt | self.llm | StrOutputParser()
             
             pattern_analysis = chain.invoke({
-                "subject": self.subject,
                 "topic_context": self.topic_context,
                 "questions_and_evaluations": analysis_data,
                 "overall_stats": stats_text
@@ -400,7 +399,6 @@ class DiagnosticAgentLangGraph(LangGraphAgentBase):
             chain = self.final_report_prompt | self.llm | StrOutputParser()
             
             final_report = chain.invoke({
-                "subject": self.subject,
                 "pattern_analysis": pattern_analysis,
                 "total_score": stats['total_score'],
                 "max_score": stats['max_score'],
@@ -531,7 +529,6 @@ class DiagnosticAgentLangGraph(LangGraphAgentBase):
                 return state
             
             diagnostic_result = {
-                'subject': self.subject,
                 'pattern_analysis': state["pattern_analysis"],
                 'statistics': state["statistics"],
                 'grade_info': state["grade_info"],
@@ -713,13 +710,11 @@ class DiagnosticAgentLangGraph(LangGraphAgentBase):
 
 # Функция для создания DiagnosticAgent на LangGraph
 def create_diagnostic_agent(
-    subject: str = "Общие знания",
     topic_context: str = None
 ) -> DiagnosticAgentLangGraph:
     """Создает экземпляр DiagnosticAgent на LangGraph"""
-    print(f"🔍 [create_diagnostic_agent] Создание DiagnosticAgent для '{subject}'")
+    print(f"🔍 [create_diagnostic_agent] Создание DiagnosticAgent")
     agent = DiagnosticAgentLangGraph(
-        subject=subject,
         topic_context=topic_context
     )
     print("✅ [create_diagnostic_agent] DiagnosticAgent создан успешно")
@@ -727,8 +722,7 @@ def create_diagnostic_agent(
 
 # Псевдоним для обратной совместимости
 def create_diagnostic_agent_langgraph(
-    subject: str = "Общие знания",
     topic_context: str = None
 ) -> DiagnosticAgentLangGraph:
     """Создает экземпляр DiagnosticAgent на LangGraph (псевдоним для обратной совместимости)"""
-    return create_diagnostic_agent(subject, topic_context)
+    return create_diagnostic_agent(topic_context)

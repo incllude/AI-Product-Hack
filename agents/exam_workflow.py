@@ -37,7 +37,6 @@ class ExamWorkflowLangGraph:
             topic_info = topic_manager._get_default_topic()
         
         self.topic_info = topic_info
-        self.subject = topic_info['subject']
         self.difficulty = topic_info['difficulty']
         self.max_questions = max_questions
         self.use_theme_structure = use_theme_structure
@@ -64,25 +63,21 @@ class ExamWorkflowLangGraph:
         
         if self.use_theme_structure:
             self.theme_agent = create_theme_agent_langgraph(
-                subject=self.subject,
                 topic_context=self.topic_context
             )
         
         # Создание основных агентов
         self.question_agent = create_question_agent_langgraph(
-            subject=self.subject,
             difficulty=self.difficulty,
             topic_context=self.topic_context,
             theme_structure=self.theme_structure
         )
         
         self.evaluation_agent = create_evaluation_agent_langgraph(
-            subject=self.subject,
             topic_context=self.topic_context
         )
         
         self.diagnostic_agent = create_diagnostic_agent_langgraph(
-            subject=self.subject,
             topic_context=self.topic_context
         )
     
@@ -503,7 +498,6 @@ class ExamWorkflowLangGraph:
             # Создаем начальное состояние
             initial_state = create_initial_exam_state(
                 student_name=student_name,
-                subject=self.subject,
                 topic_context=self.topic_context,
                 difficulty=self.difficulty,
                 max_questions=self.max_questions,

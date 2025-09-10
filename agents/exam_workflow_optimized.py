@@ -61,7 +61,6 @@ class OptimizedExamWorkflowLangGraph:
             topic_info = topic_manager._get_default_topic()
         
         self.topic_info = topic_info
-        self.subject = topic_info['subject']
         self.difficulty = topic_info['difficulty']
         self.max_questions = max_questions
         self.use_theme_structure = use_theme_structure
@@ -102,14 +101,12 @@ class OptimizedExamWorkflowLangGraph:
         # Инициализация агентов с общим LLM
         if self.use_theme_structure:
             self._theme_agent = create_theme_agent_langgraph(
-                subject=self.subject,
                 topic_context=self.topic_context
             )
             # Заменяем LLM на общий экземпляр
             self._theme_agent.llm = self.shared_llm
         
         self._question_agent = create_question_agent_langgraph(
-            subject=self.subject,
             difficulty=self.difficulty,
             topic_context=self.topic_context,
             theme_structure=None
@@ -118,14 +115,12 @@ class OptimizedExamWorkflowLangGraph:
         self._question_agent.llm = self.shared_llm
         
         self._evaluation_agent = create_evaluation_agent_langgraph(
-            subject=self.subject,
             topic_context=self.topic_context
         )
         # Заменяем LLM на общий экземпляр
         self._evaluation_agent.llm = self.shared_llm
         
         self._diagnostic_agent = create_diagnostic_agent_langgraph(
-            subject=self.subject,
             topic_context=self.topic_context
         )
         # Заменяем LLM на общий экземпляр
@@ -149,7 +144,6 @@ class OptimizedExamWorkflowLangGraph:
         def create_theme_agent():
             if self.use_theme_structure:
                 agent = create_theme_agent_langgraph(
-                    subject=self.subject,
                     topic_context=self.topic_context
                 )
                 # Заменяем LLM на общий экземпляр
@@ -159,7 +153,6 @@ class OptimizedExamWorkflowLangGraph:
         
         def create_question_agent():
             agent = create_question_agent_langgraph(
-                subject=self.subject,
                 difficulty=self.difficulty,
                 topic_context=self.topic_context,
                 theme_structure=None
@@ -170,7 +163,6 @@ class OptimizedExamWorkflowLangGraph:
         
         def create_evaluation_agent():
             agent = create_evaluation_agent_langgraph(
-                subject=self.subject,
                 topic_context=self.topic_context
             )
             # Заменяем LLM на общий экземпляр
@@ -179,7 +171,6 @@ class OptimizedExamWorkflowLangGraph:
         
         def create_diagnostic_agent():
             agent = create_diagnostic_agent_langgraph(
-                subject=self.subject,
                 topic_context=self.topic_context
             )
             # Заменяем LLM на общий экземпляр

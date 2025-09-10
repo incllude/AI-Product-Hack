@@ -130,7 +130,7 @@ class ExamSession:
         return ExamState(
             session_id=self.session_id,
             student_name=self.student_name,
-            subject=self.subject,
+            subject="Общие знания",  # Default value since subject field is removed
             difficulty=self.difficulty,
             topic_context=self.topic_context,
             status=self.status,
@@ -179,10 +179,9 @@ class ExamSession:
 class LangGraphAgentBase:
     """Базовый класс для всех LangGraph агентов"""
     
-    def __init__(self, subject: str = "Общие знания", topic_context: str = None):
-        print(f"🔍 [BaseAgent] Инициализация {self.__class__.__name__} для предмета: {subject}")
-        self.subject = subject
-        self.topic_context = topic_context or f"Общий экзамен по предмету {subject}"
+    def __init__(self, topic_context: str = None):
+        print(f"🔍 [BaseAgent] Инициализация {self.__class__.__name__}")
+        self.topic_context = topic_context or "Общий экзамен"
         self.agent_id = f"{self.__class__.__name__}_{uuid.uuid4().hex[:8]}"
         self.history = []
         print(f"✅ [BaseAgent] {self.__class__.__name__} базовая инициализация завершена (ID: {self.agent_id})")
@@ -205,7 +204,6 @@ class LangGraphAgentBase:
         return {
             'agent_class': self.__class__.__name__,
             'agent_id': self.agent_id,
-            'subject': self.subject,
             'topic_context': self.topic_context[:100] + "..." if len(self.topic_context) > 100 else self.topic_context,
             'operations_count': len(self.history),
             'last_operation': self.history[-1] if self.history else None
@@ -217,7 +215,6 @@ class LangGraphAgentBase:
 
 def create_initial_exam_state(
     student_name: str = "Студент",
-    subject: str = "Общие знания", 
     topic_context: str = "",
     difficulty: str = "средний",
     max_questions: int = 5,
@@ -229,7 +226,7 @@ def create_initial_exam_state(
     return ExamState(
         session_id=session_id,
         student_name=student_name,
-        subject=subject,
+        subject="Общие знания",  # Default value since subject is no longer a parameter
         difficulty=difficulty,
         topic_context=topic_context,
         status="not_started",
@@ -254,7 +251,7 @@ def validate_exam_state(state: ExamState) -> List[str]:
     errors = []
     
     # Проверка обязательных полей
-    required_fields = ['session_id', 'student_name', 'subject', 'status']
+    required_fields = ['session_id', 'student_name', 'status']
     for field in required_fields:
         if not state.get(field):
             errors.append(f"Отсутствует обязательное поле: {field}")
