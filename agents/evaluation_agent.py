@@ -353,7 +353,9 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
         understanding_reason_match = re.search(r'ПОНИМАНИЕ:\s*\d+/10\s*[—\-–]\s*(.+?)(?=\n[А-ЯЁЇІЄҐ]+:|$)', response, re.DOTALL)
         
         # Поддерживаем числа с точкой и запятой в качестве десятичного разделителя
-        total_score_match = re.search(r'ИТОГОВАЯ_ОЦЕНКА:\s*([\d,\.]+)\/10', response)
+        # ОТКЛЮЧЕНО: Не используем итоговую оценку от LLM, только расчетную
+        # total_score_match = re.search(r'ИТОГОВАЯ_ОЦЕНКА:\s*([\d,\.]+)\/10', response)
+        total_score_match = None
         
         # Извлечение текстовых блоков с улучшенными границами
         feedback_match = re.search(r'ДЕТАЛЬНАЯ_ОБРАТНАЯ_СВЯЗЬ:\s*(.+?)(?=\n(?:СИЛЬНЫЕ_СТОРОНЫ:|СЛАБЫЕ_СТОРОНЫ:)|$)', response, re.DOTALL)
@@ -369,33 +371,10 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
         criteria_scores = [correctness_score, completeness_score, understanding_score]
         calculated_score = sum(criteria_scores) / len(criteria_scores) if criteria_scores else 0
         
-        # Проверяем согласованность с ИТОГОВАЯ_ОЦЕНКА
-        llm_final_score = None
-        if total_score_match:
-            # Заменяем запятую на точку для парсинга float
-            score_str = total_score_match.group(1).replace(',', '.')
-            try:
-                llm_final_score = float(score_str)
-            except ValueError:
-                print(f"⚠️ Не удалось распарсить итоговую оценку: {total_score_match.group(1)}")
-                llm_final_score = None
-        
-        # ЛОГИКА ВЫБОРА ФИНАЛЬНОЙ ОЦЕНКИ:
+        # УПРОЩЕННАЯ ЛОГИКА: Всегда используем только расчетную оценку
+        llm_final_score = None  # Не извлекаем итоговую оценку от LLM
+        final_score = calculated_score  # Используем среднее арифметическое критериев
         consistency_warning = None
-        
-        if llm_final_score is not None:
-            # Если разница между LLM оценкой и расчетной больше 2 баллов, используем расчетную
-            score_difference = abs(llm_final_score - calculated_score)
-            if score_difference > 2.0:
-                print(f"⚠️ Большая разница в оценках: LLM={llm_final_score}, Расчетная={calculated_score:.1f}. Используем расчетную.")
-                final_score = calculated_score
-                consistency_warning = f"Обнаружено несоответствие: LLM оценка {llm_final_score}, расчетная {calculated_score:.1f}"
-            else:
-                # Используем среднее между LLM и расчетной оценкой для более справедливого результата
-                final_score = (llm_final_score + calculated_score) / 2
-        else:
-            # Если LLM не предоставил итоговую оценку, используем расчетную
-            final_score = calculated_score
         
         # Дополнительная проверка: если все критерии 0, но итоговая оценка > 0
         if all(score == 0 for score in criteria_scores) and final_score > 0:
@@ -409,7 +388,6 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
             print(f"  Правильность: {correctness_score}/10 (найдено: {correctness_score_match is not None})")
             print(f"  Полнота: {completeness_score}/10 (найдено: {completeness_score_match is not None})")
             print(f"  Понимание: {understanding_score}/10 (найдено: {understanding_score_match is not None})")
-            print(f"  LLM итоговая: {llm_final_score} (найдено: {total_score_match is not None})")
             print(f"  Расчетная: {calculated_score:.1f}")
             print(f"  Финальная: {final_score:.1f}")
             print(f"  Первые строки ответа:")
@@ -417,8 +395,9 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
             for i, line in enumerate(lines):
                 print(f"    [{i}]: {line}")
         else:
-            # Успешный парсинг - показываем краткую информацию
-            print(f"✅ [Парсинг] Оценки: {correctness_score}/{completeness_score}/{understanding_score}, итого: {final_score:.1f}")
+            # Успешный парсинг - НЕ показываем детали пользователю
+            # print(f"✅ [Парсинг] Оценки: {correctness_score}/{completeness_score}/{understanding_score}, итого: {final_score:.1f}")
+            pass
         
         result = {
             'type': 'detailed',
@@ -439,9 +418,9 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
             'raw_response': response,
             'evaluation_metadata': {
                 'calculated_score': round(calculated_score, 1),
-                'llm_final_score': llm_final_score,
+                'llm_final_score': None,  # Не используем LLM оценку
                 'consistency_warning': consistency_warning,
-                'score_method': 'criteria_average' if llm_final_score is None else 'weighted_average'
+                'score_method': 'criteria_average'  # Всегда используем среднее арифметическое
             }
         }
         
