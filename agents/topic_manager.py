@@ -16,14 +16,6 @@ class TopicManager:
                 "subject": "Программирование",
                 "description": "Изучение циклов for, while, break, continue в Python",
                 "difficulty_levels": ["легкий", "средний", "сложный"],
-                "key_concepts": [
-                    "цикл for",
-                    "цикл while",
-                    "операторы break и continue",
-                    "вложенные циклы",
-                    "итераторы и генераторы",
-                    "list comprehension"
-                ],
                 "sample_questions": [
                     "Объясните разницу между циклом for и while",
                     "Как работает оператор break в Python?",
@@ -35,14 +27,6 @@ class TopicManager:
                 "subject": "Физика",
                 "description": "Изучение фотоэлектрического эффекта и его законов",
                 "difficulty_levels": ["легкий", "средний", "сложный"],
-                "key_concepts": [
-                    "фотоэлектрический эффект",
-                    "уравнение Эйнштейна",
-                    "работа выхода",
-                    "красная граница фотоэффекта",
-                    "кинетическая энергия фотоэлектронов",
-                    "квантовая природа света"
-                ],
                 "sample_questions": [
                     "Сформулируйте законы фотоэффекта",
                     "Объясните уравнение Эйнштейна для фотоэффекта",
@@ -128,7 +112,7 @@ class TopicManager:
                         'name': topic_info['name'],
                         'description': topic_info['description'],
                         'difficulty': difficulty,
-                        'key_concepts': topic_info['key_concepts']
+                        'key_concepts': []
                     }
                 else:
                     print("Неверный номер. Попробуйте еще раз.")
@@ -159,11 +143,6 @@ class TopicManager:
         
         difficulty = self._select_difficulty(["легкий", "средний", "сложный"])
         
-        # Ключевые концепции (необязательно)
-        concepts_input = input("\nКлючевые концепции через запятую (необязательно): ").strip()
-        key_concepts = []
-        if concepts_input:
-            key_concepts = [concept.strip() for concept in concepts_input.split(',') if concept.strip()]
         
         print(f"\n✅ Создана тема: {name}")
         
@@ -174,7 +153,7 @@ class TopicManager:
             'subject': subject,
             'description': description,
             'difficulty': difficulty,
-            'key_concepts': key_concepts
+            'key_concepts': []
         }
     
     def _select_difficulty(self, available_levels: List[str]) -> str:
@@ -208,7 +187,7 @@ class TopicManager:
             'name': topic_info['name'],
             'description': topic_info['description'],
             'difficulty': "средний",
-            'key_concepts': topic_info['key_concepts']
+            'key_concepts': []
         }
     
     def get_topic_context_for_prompts(self, topic_info: Dict[str, any]) -> str:
@@ -225,8 +204,6 @@ class TopicManager:
         context += f"ОПИСАНИЕ: {topic_info['description']}\n"
         context += f"УРОВЕНЬ СЛОЖНОСТИ: {topic_info['difficulty']}\n"
         
-        if topic_info.get('key_concepts'):
-            context += f"КЛЮЧЕВЫЕ КОНЦЕПЦИИ: {', '.join(topic_info['key_concepts'])}\n"
         
         context += "\nВопросы должны быть строго по данной теме и соответствовать указанному уровню сложности."
         

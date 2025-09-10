@@ -507,7 +507,7 @@ def setup_exam_on_main():
                 'subject': raw_topic['subject'],
                 'description': raw_topic['description'],
                 'difficulty': 'средний',  # Установим по умолчанию
-                'key_concepts': raw_topic['key_concepts']
+                'key_concepts': []
             }
     
         else:
@@ -524,17 +524,6 @@ def setup_exam_on_main():
                 height=80
             )
         
-        # Ключевые концепции (необязательно)
-            custom_concepts_input = st.text_area(
-                "Ключевые концепции (через запятую):",
-                placeholder="концепция1, концепция2, концепция3...",
-                height=60
-            )
-        
-            # Обработка ключевых концепций для пользовательской темы
-            key_concepts = []
-            if custom_concepts_input.strip():
-                key_concepts = [concept.strip() for concept in custom_concepts_input.split(',') if concept.strip()]
             
             # Создаем структуру для пользовательской темы
             topic_info = {
@@ -544,7 +533,7 @@ def setup_exam_on_main():
                 'subject': "Общие знания",
                 'description': custom_description if custom_description.strip() else f"Экзамен по теме: {custom_name if custom_name.strip() else 'Пользовательская тема'}",
                 'difficulty': 'средний',
-                'key_concepts': key_concepts
+                'key_concepts': []
             }
     
     with col2:
