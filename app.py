@@ -8,6 +8,7 @@ import os
 import json
 import time
 import uuid
+import re
 from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
@@ -325,9 +326,21 @@ def display_chat_messages():
         
         elif message["role"] == "assistant":
             if message.get("type") == "question":
-                st.write("**❓ Вопрос:**")
-                st.write(message['content'])
+                # Извлекаем номер вопроса из контента
+                content = message['content']
+                # Ищем "Вопрос X" в начале контента
+                question_match = re.match(r'\*\*Вопрос (\d+|\?)\*\*\n\n(.+)', content, re.DOTALL)
+                if question_match:
+                    question_number = question_match.group(1)
+                    question_text = question_match.group(2)
+                    st.write(f"**❓ Вопрос {question_number}:**")
+                    st.write(question_text)
+                else:
+                    # Если не удалось распарсить, показываем как есть
+                    st.write("**❓ Вопрос:**")
+                    st.write(content)
                 st.divider()
+                
             
             elif message.get("type") == "evaluation":
                 st.write("**📊 Оценка:**")
@@ -471,12 +484,13 @@ def setup_exam_on_main():
     
     # Инициализируем переменные по умолчанию
     custom_name = ""
+    custom_concepts_input = ""  # Initialize here to avoid UnboundLocalError
     
     with col1:
         if topic_source == "Готовые темы":
-            # Выбор из предопределенных тем
+        # Выбор из предопределенных тем
             topics = topic_manager.get_predefined_topics()
-            
+        
             topic_options = {f"{topic['name']} ({topic['subject']})": key 
                             for key, topic in topics.items()}
             
@@ -485,7 +499,7 @@ def setup_exam_on_main():
                 options=list(topic_options.keys()),
                 index=0
             )
-            
+        
             selected_topic_key = topic_options[selected_topic_display]
             raw_topic = topics[selected_topic_key]
             
@@ -499,34 +513,34 @@ def setup_exam_on_main():
                 'difficulty': 'средний',  # Установим по умолчанию
                 'key_concepts': raw_topic['key_concepts']
             }
-        
+    
         else:
-            # Ввод пользовательской темы
+        # Ввод пользовательской темы
             custom_name = st.text_input(
                 "Название темы:",
                 placeholder="Например: Квантовая физика"
             )
-            
+        
             custom_subject = st.text_input(
                 "Предмет:",
                 placeholder="Например: Физика",
                 value="Общие знания"
             )
-            
+        
             custom_description = st.text_area(
                 "Описание темы (необязательно):",
                 placeholder="Краткое описание того, что будет изучаться...",
                 height=80
             )
-            
-            # Ключевые концепции (необязательно)
+        
+        # Ключевые концепции (необязательно)
             custom_concepts_input = st.text_area(
                 "Ключевые концепции (через запятую):",
                 placeholder="концепция1, концепция2, концепция3...",
                 height=60
             )
-            
-            # Обработка ключевых концепций
+        
+            # Обработка ключевых концепций для пользовательской темы
             key_concepts = []
             if custom_concepts_input.strip():
                 key_concepts = [concept.strip() for concept in custom_concepts_input.split(',') if concept.strip()]
@@ -557,17 +571,6 @@ def setup_exam_on_main():
         
         max_questions = st.slider("Количество вопросов", 3, 10, 5)
         use_theme_structure = st.checkbox("Использовать структуру по Блуму", False)
-        
-        # Информация о теме
-        st.markdown("### 📚 О теме")
-        st.write(f"**Предмет:** {topic_info['subject']}")
-        st.write(f"**Описание:** {topic_info['description'][:100]}...")
-        st.write(f"**Уровень:** {topic_info['difficulty']}")
-        
-        if topic_info.get('key_concepts'):
-            st.write("**Ключевые концепции:**")
-            for concept in topic_info['key_concepts'][:3]:
-                st.write(f"• {concept}")
     
     # Проверка готовности к началу экзамена
     can_start_exam = True
@@ -667,8 +670,6 @@ def start_exam(topic_info, max_questions, use_theme_structure):
 **Предмет:** {topic_info['subject']}
 **Вопросов:** {max_questions}
 **Режим:** {'Структурированный' if use_theme_structure else 'Быстрый'}
-**ID сессии:** {session_id}
-**Агенты:** LangGraph 🔧
 
 Экзамен готов к началу! Нажмите кнопку ниже для получения первого вопроса."""
             
@@ -699,9 +700,7 @@ def get_next_question():
             # Форматирование вопроса для отображения
             question_text = f"""**Вопрос {question_data.get('question_number', '?')}**
 
-{question_data['question']}
-
-*Уровень: {question_data.get('topic_level', 'базовый')}*"""
+{question_data['question']}"""
             
             add_message("assistant", question_text, "question", metadata=question_data)
             
@@ -884,6 +883,31 @@ def display_progress_header():
             padding-top: 1rem;
         }}
         
+        /* Отступ для sidebar чтобы не залезал под прогресс-бар */
+        .css-1d391kg {{
+            padding-top: 120px !important;
+        }}
+        
+        /* Альтернативный селектор для sidebar */
+        .css-1cypcdb {{
+            padding-top: 120px !important;
+        }}
+        
+        /* Еще один селектор для sidebar */
+        .css-1v0mbdj {{
+            padding-top: 120px !important;
+        }}
+        
+        /* Универсальный селектор для sidebar */
+        [data-testid="stSidebar"] {{
+            padding-top: 120px !important;
+        }}
+        
+        /* Селектор для контента sidebar */
+        [data-testid="stSidebar"] > div {{
+            padding-top: 120px !important;
+        }}
+        
         /* Фиксированный прогресс-бар */
         .fixed-progress-bar {{
             position: fixed;
@@ -912,26 +936,61 @@ def display_progress_header():
             gap: 10px;
         }}
         
+        .progress-left {{
+            flex: 1;
+        }}
+        
+        .restart-button {{
+            background: linear-gradient(135deg, #ff6b6b, #ee5a52);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(255, 107, 107, 0.3);
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            white-space: nowrap;
+            text-decoration: none;
+        }}
+        
+        .restart-button:hover {{
+            background: linear-gradient(135deg, #ff5252, #d32f2f);
+            box-shadow: 0 4px 12px rgba(255, 107, 107, 0.4);
+            transform: translateY(-1px);
+        }}
+        
+        .restart-button:active {{
+            transform: translateY(0);
+            box-shadow: 0 2px 6px rgba(255, 107, 107, 0.3);
+        }}
+        
         .progress-title {{
             margin: 0;
             color: white;
-            font-size: 1.1rem;
+            font-size: 1.3rem;
             font-weight: bold;
         }}
         
         .progress-stats {{
             display: flex;
-            gap: 12px;
-            font-size: 13px;
-            font-weight: 500;
+            gap: 16px;
+            font-size: 16px;
+            font-weight: 600;
             flex-wrap: wrap;
         }}
         
         .progress-stat {{
-            background: rgba(255,255,255,0.2);
-            padding: 4px 8px;
-            border-radius: 8px;
+            background: rgba(255,255,255,0.25);
+            padding: 8px 12px;
+            border-radius: 10px;
             white-space: nowrap;
+            font-weight: 600;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }}
         
         .progress-bar-container {{
@@ -988,11 +1047,11 @@ def display_progress_header():
                 padding: 0.8rem 1rem;
             }}
             .progress-stats {{
-                font-size: 12px;
-                gap: 8px;
+                font-size: 14px;
+                gap: 12px;
             }}
             .progress-title {{
-                font-size: 1rem;
+                font-size: 1.1rem;
             }}
             .content-with-fixed-progress {{
                 margin-top: 20px;
@@ -1000,25 +1059,79 @@ def display_progress_header():
             .main-title-with-progress {{
                 margin-top: 160px !important;
             }}
+            .restart-button {{
+                padding: 6px 12px;
+                font-size: 12px;
+                border-radius: 16px;
+            }}
+            .progress-header {{
+                flex-direction: column;
+                gap: 8px;
+                align-items: stretch;
+            }}
+            .progress-left {{
+                flex: none;
+            }}
         }}
         </style>
         
         <div class="fixed-progress-bar">
             <div class="progress-header">
-                <h3 class="progress-title">📊 Прогресс диагностики</h3>
-                <div class="progress-stats">
-                    <span class="progress-stat">📝 Вопрос {progress['questions_answered']}/{progress['max_questions']}</span>
-                    <span class="progress-stat">⭐ Баллы {progress['current_score']}/{progress['max_possible_score']}</span>
-                    <span class="progress-stat {'success-indicator' if success_rate >= 80 else 'warning-indicator' if success_rate >= 60 else 'danger-indicator'}">
-                        📈 {success_rate:.0f}% успеваемость
-                    </span>
+                <div class="progress-left">
+                    <h3 class="progress-title">📊 Прогресс диагностики</h3>
+                    <div class="progress-stats">
+                        <span class="progress-stat">📝 Вопрос {progress['questions_answered']}/{progress['max_questions']}</span>
+                        <span class="progress-stat">⭐ Баллы {progress['current_score']}/{progress['max_possible_score']}</span>
+                        <span class="progress-stat {'success-indicator' if success_rate >= 80 else 'warning-indicator' if success_rate >= 60 else 'danger-indicator'}">
+                            📈 {success_rate:.0f}% успеваемость
+                        </span>
+                    </div>
                 </div>
+                <button class="restart-button" onclick="
+                    setTimeout(() => {{
+                        const button = document.querySelector('button[key=\\"restart_progress\\"]');
+                        if (button) button.click();
+                        else {{
+                            const buttons = document.querySelectorAll('button');
+                            for (let btn of buttons) {{
+                                if (btn.textContent && btn.textContent.includes('Начать заново')) {{
+                                    btn.click();
+                                    break;
+                                }}
+                            }}
+                        }}
+                    }}, 100);
+                ">
+                    🔄 Начать заново
+                </button>
             </div>
             <div class="progress-bar-container">
                 <div class="progress-bar"></div>
             </div>
         </div>
         """, unsafe_allow_html=True)
+        
+        # Скрытая кнопка для обработки нажатия из HTML кнопки (невидимая)
+        st.markdown("""
+        <style>
+        [data-testid="baseButton-secondary"][key="restart_progress"] {
+            display: none !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        if st.button("🔄 Начать заново", type="secondary", key="restart_progress", help="Завершить текущую диагностику и начать новую"):
+            # Завершаем текущую сессию логирования
+            if st.session_state.dialog_logger:
+                st.session_state.dialog_logger.end_session("reset")
+            
+            # Сброс состояния
+            keys_to_keep = ['student_name']
+            for key in list(st.session_state.keys()):
+                if key not in keys_to_keep:
+                    del st.session_state[key]
+            initialize_session_state()
+            st.rerun()
         
     except Exception as e:
         st.error(f"Ошибка при отображении прогресса: {str(e)}")
@@ -1415,38 +1528,10 @@ def main():
                 with col_show2:
                     if st.button("📊 Показать анализ результатов", type="primary", use_container_width=True):
                         st.session_state['hide_visualization'] = False
-                        st.rerun()
-        
+                st.rerun()
+    
         st.markdown('</div>', unsafe_allow_html=True)  # Закрываем div для отступа
     
-    # Кнопка сброса экзамена (в sidebar если экзамен начат)
-    if st.session_state.exam_started:
-        st.sidebar.markdown("---")
-        
-        # Показываем информацию о текущей сессии
-        if st.session_state.dialog_logger:
-            session_summary = st.session_state.dialog_logger.get_session_summary()
-            if session_summary:
-                st.sidebar.markdown("### 📝 Текущая сессия")
-                st.sidebar.write(f"**ID:** {session_summary['session_id']}")
-                st.sidebar.write(f"**Тип:** {session_summary['agent_type']}")
-                st.sidebar.write(f"**Вопросов:** {session_summary['questions_count']}")
-                st.sidebar.write(f"**Ответов:** {session_summary['answers_count']}")
-                if session_summary['answers_count'] > 0:
-                    st.sidebar.write(f"**Средний балл:** {session_summary['average_score']:.1f}")
-        
-        if st.sidebar.button("🔄 Начать заново", type="secondary"):
-            # Завершаем текущую сессию логирования
-            if st.session_state.dialog_logger:
-                st.session_state.dialog_logger.end_session("reset")
-            
-            # Сброс состояния
-            keys_to_keep = ['student_name']
-            for key in list(st.session_state.keys()):
-                if key not in keys_to_keep:
-                    del st.session_state[key]
-            initialize_session_state()
-            st.rerun()
 
 if __name__ == "__main__":
     main()
