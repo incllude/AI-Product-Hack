@@ -341,29 +341,44 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
         """Исправленный парсинг детальной оценки с проверкой согласованности"""
         # print("[EvaluationAgent] _parse_detailed_evaluation вызван")
         
-        # Извлечение оценок по критериям
-        correctness_match = re.search(r'ПРАВИЛЬНОСТЬ:\s*(\d+)/10\s*-\s*(.+?)(?=\n|$)', response)
-        completeness_match = re.search(r'ПОЛНОТА:\s*(\d+)/10\s*-\s*(.+?)(?=\n|$)', response)
-        understanding_match = re.search(r'ПОНИМАНИЕ:\s*(\d+)/10\s*-\s*(.+?)(?=\n|$)', response)
+        # Упрощенные и надежные регулярные выражения
+        # Сначала ищем только числовые оценки
+        correctness_score_match = re.search(r'ПРАВИЛЬНОСТЬ:\s*(\d+)/10', response)
+        completeness_score_match = re.search(r'ПОЛНОТА:\s*(\d+)/10', response)
+        understanding_score_match = re.search(r'ПОНИМАНИЕ:\s*(\d+)/10', response)
         
-        total_score_match = re.search(r'ИТОГОВАЯ_ОЦЕНКА:\s*([\d.]+)/10', response)
+        # Затем отдельно ищем обоснования
+        correctness_reason_match = re.search(r'ПРАВИЛЬНОСТЬ:\s*\d+/10\s*[—\-–]\s*(.+?)(?=\n[А-ЯЁЇІЄҐ]+:|$)', response, re.DOTALL)
+        completeness_reason_match = re.search(r'ПОЛНОТА:\s*\d+/10\s*[—\-–]\s*(.+?)(?=\n[А-ЯЁЇІЄҐ]+:|$)', response, re.DOTALL)
+        understanding_reason_match = re.search(r'ПОНИМАНИЕ:\s*\d+/10\s*[—\-–]\s*(.+?)(?=\n[А-ЯЁЇІЄҐ]+:|$)', response, re.DOTALL)
         
-        # Извлечение текстовых блоков
-        feedback_match = re.search(r'ДЕТАЛЬНАЯ_ОБРАТНАЯ_СВЯЗЬ:\s*(.+?)(?=\nСИЛЬНЫЕ_СТОРОНЫ:|$)', response, re.DOTALL)
-        strengths_match = re.search(r'СИЛЬНЫЕ_СТОРОНЫ:\s*(.+?)(?=\nСЛАБЫЕ_СТОРОНЫ:|$)', response, re.DOTALL)
-        weaknesses_match = re.search(r'СЛАБЫЕ_СТОРОНЫ:\s*(.+?)(?=\n|$)', response, re.DOTALL)
+        # Поддерживаем числа с точкой и запятой в качестве десятичного разделителя
+        total_score_match = re.search(r'ИТОГОВАЯ_ОЦЕНКА:\s*([\d,\.]+)\/10', response)
+        
+        # Извлечение текстовых блоков с улучшенными границами
+        feedback_match = re.search(r'ДЕТАЛЬНАЯ_ОБРАТНАЯ_СВЯЗЬ:\s*(.+?)(?=\n(?:СИЛЬНЫЕ_СТОРОНЫ:|СЛАБЫЕ_СТОРОНЫ:)|$)', response, re.DOTALL)
+        strengths_match = re.search(r'СИЛЬНЫЕ_СТОРОНЫ:\s*(.+?)(?=\n(?:СЛАБЫЕ_СТОРОНЫ:|ДЕТАЛЬНАЯ_ОБРАТНАЯ_СВЯЗЬ:)|$)', response, re.DOTALL)
+        weaknesses_match = re.search(r'СЛАБЫЕ_СТОРОНЫ:\s*(.+?)(?=\n(?:СИЛЬНЫЕ_СТОРОНЫ:|ДЕТАЛЬНАЯ_ОБРАТНАЯ_СВЯЗЬ:)|$)', response, re.DOTALL)
         
         # Извлекаем оценки по критериям
-        correctness_score = int(correctness_match.group(1)) if correctness_match else 0
-        completeness_score = int(completeness_match.group(1)) if completeness_match else 0
-        understanding_score = int(understanding_match.group(1)) if understanding_match else 0
+        correctness_score = int(correctness_score_match.group(1)) if correctness_score_match else 0
+        completeness_score = int(completeness_score_match.group(1)) if completeness_score_match else 0
+        understanding_score = int(understanding_score_match.group(1)) if understanding_score_match else 0
         
         # ИСПРАВЛЕНИЕ: используем среднее арифметическое критериев как основу
         criteria_scores = [correctness_score, completeness_score, understanding_score]
         calculated_score = sum(criteria_scores) / len(criteria_scores) if criteria_scores else 0
         
         # Проверяем согласованность с ИТОГОВАЯ_ОЦЕНКА
-        llm_final_score = float(total_score_match.group(1)) if total_score_match else None
+        llm_final_score = None
+        if total_score_match:
+            # Заменяем запятую на точку для парсинга float
+            score_str = total_score_match.group(1).replace(',', '.')
+            try:
+                llm_final_score = float(score_str)
+            except ValueError:
+                print(f"⚠️ Не удалось распарсить итоговую оценку: {total_score_match.group(1)}")
+                llm_final_score = None
         
         # ЛОГИКА ВЫБОРА ФИНАЛЬНОЙ ОЦЕНКИ:
         consistency_warning = None
@@ -388,6 +403,23 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
             final_score = 0
             consistency_warning = "Все критерии оценены в 0 баллов, итоговая оценка скорректирована"
         
+        # Отладочная информация парсинга (только при проблемах)
+        if all(score == 0 for score in criteria_scores) and "ПРАВИЛЬНОСТЬ:" in response:
+            print(f"⚠️ [Парсинг] Критерии не найдены! Отладка:")
+            print(f"  Правильность: {correctness_score}/10 (найдено: {correctness_score_match is not None})")
+            print(f"  Полнота: {completeness_score}/10 (найдено: {completeness_score_match is not None})")
+            print(f"  Понимание: {understanding_score}/10 (найдено: {understanding_score_match is not None})")
+            print(f"  LLM итоговая: {llm_final_score} (найдено: {total_score_match is not None})")
+            print(f"  Расчетная: {calculated_score:.1f}")
+            print(f"  Финальная: {final_score:.1f}")
+            print(f"  Первые строки ответа:")
+            lines = response.split('\n')[:5]
+            for i, line in enumerate(lines):
+                print(f"    [{i}]: {line}")
+        else:
+            # Успешный парсинг - показываем краткую информацию
+            print(f"✅ [Парсинг] Оценки: {correctness_score}/{completeness_score}/{understanding_score}, итого: {final_score:.1f}")
+        
         result = {
             'type': 'detailed',
             'total_score': round(final_score, 1),
@@ -397,9 +429,9 @@ class EvaluationAgentLangGraph(LangGraphAgentBase):
                 'understanding': understanding_score
             },
             'criteria_feedback': {
-                'correctness': correctness_match.group(2).strip() if correctness_match else "",
-                'completeness': completeness_match.group(2).strip() if completeness_match else "",
-                'understanding': understanding_match.group(2).strip() if understanding_match else ""
+                'correctness': correctness_reason_match.group(1).strip() if correctness_reason_match else "",
+                'completeness': completeness_reason_match.group(1).strip() if completeness_reason_match else "",
+                'understanding': understanding_reason_match.group(1).strip() if understanding_reason_match else ""
             },
             'detailed_feedback': feedback_match.group(1).strip() if feedback_match else "",
             'strengths': strengths_match.group(1).strip() if strengths_match else "",
