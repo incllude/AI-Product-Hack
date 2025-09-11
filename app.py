@@ -83,12 +83,21 @@ class DialogLogger:
         if not self.dialog_data:
             return
         
+        # Расширенные метаданные для сообщения
+        enhanced_metadata = metadata or {}
+        enhanced_metadata.update({
+            "message_id": str(uuid.uuid4())[:8],
+            "session_id": self.session_id,
+            "message_length": len(content) if content else 0,
+            "logged_at": datetime.now().isoformat()
+        })
+        
         message_entry = {
             "timestamp": datetime.now().isoformat(),
             "role": role,
             "content": content,
             "type": message_type,
-            "metadata": metadata or {}
+            "metadata": enhanced_metadata
         }
         
         self.dialog_data["messages"].append(message_entry)
@@ -174,11 +183,29 @@ class DialogLogger:
         if not self.dialog_data:
             return
         
-        self.dialog_data["final_report"] = {
+        # Расширенная информация о финальном отчете
+        enhanced_report = {
             "timestamp": datetime.now().isoformat(),
-            "report_data": final_report
+            "report_data": final_report,
+            "summary": {
+                "total_questions_logged": len(self.dialog_data.get("questions_and_answers", [])),
+                "total_messages_logged": len(self.dialog_data.get("messages", [])),
+                "session_duration_seconds": None,
+                "completion_status": "completed_with_report"
+            }
         }
         
+        # Вычисляем длительность сессии, если возможно
+        if self.dialog_data.get("session_info", {}).get("start_time"):
+            try:
+                start_time = datetime.fromisoformat(self.dialog_data["session_info"]["start_time"])
+                end_time = datetime.now()
+                duration = (end_time - start_time).total_seconds()
+                enhanced_report["summary"]["session_duration_seconds"] = duration
+            except:
+                pass
+        
+        self.dialog_data["final_report"] = enhanced_report
         self._save_log()
     
     def log_exam_session(self, exam_session_id, workflow_state=None):
@@ -316,6 +343,16 @@ def initialize_session_state():
     
     if 'auto_skip_triggered' not in st.session_state:
         st.session_state.auto_skip_triggered = False
+    
+    # Состояния для просмотра деталей диагностики
+    if 'viewing_exam_details' not in st.session_state:
+        st.session_state.viewing_exam_details = False
+    
+    if 'selected_exam_filename' not in st.session_state:
+        st.session_state.selected_exam_filename = None
+    
+    if 'viewing_final_report' not in st.session_state:
+        st.session_state.viewing_final_report = False
 
 def add_message(role, content, message_type="text", metadata=None):
     """Добавление сообщения в чат"""
@@ -460,9 +497,7 @@ def load_exam_history():
                         'session_id': session_info.get('session_id', 'Unknown'),
                         'student_name': session_info.get('student_name', 'Unknown'),
                         'topic_name': exam_config.get('topic_info', {}).get('name', 'Unknown'),
-                        'subject': exam_config.get('topic_info', {}).get('subject', 'Unknown'),
                         'start_time': session_info.get('start_time', ''),
-                        'status': session_info.get('status', 'unknown'),
                         'questions_count': statistics.get('total_questions', 0),
                         'average_score': statistics.get('average_score', 0),
                         'agent_type': session_info.get('agent_type', 'unknown')
@@ -476,6 +511,409 @@ def load_exam_history():
     # Сортируем по времени (новые сверху)
     history.sort(key=lambda x: x['start_time'], reverse=True)
     return history
+
+def load_exam_details(filename):
+    """Загрузка детальных данных диагностики"""
+    logs_dir = os.path.join(os.path.dirname(__file__), 'logs', 'dialogs')
+    filepath = os.path.join(logs_dir, filename)
+    
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data
+    except Exception as e:
+        st.error(f"Ошибка при загрузке данных диагностики: {str(e)}")
+        return None
+
+def display_embedded_final_report(exam_data):
+    """Отображение встроенного финального отчета в детальном просмотре"""
+    # Используем существующую функцию визуализации, но с компактным заголовком
+    data = extract_historical_evaluation_data(exam_data)
+    if not data or data['questions_count'] == 0:
+        st.info("📊 Данные для анализа недоступны")
+        return
+    
+    # Компактный заголовок для встроенного отчета
+    st.markdown(f"""
+    <div style="
+        background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+        padding: 1rem;
+        border-radius: 10px;
+        margin: 1rem 0;
+        color: white;
+        text-align: center;
+    ">
+        <h3 style="margin: 0; color: white;">📊 Результаты диагностики</h3>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Основная статистика
+    avg_score = sum(data['scores']) / len(data['scores']) if data['scores'] else 0
+    max_score = max(data['scores']) if data['scores'] else 0
+    min_score = min(data['scores']) if data['scores'] else 0
+    
+    # Метрики в полном формате
+    col_metric1, col_metric2, col_metric3, col_metric4 = st.columns(4)
+    with col_metric1:
+        st.metric("🎯 Средний балл", f"{avg_score:.1f}/10")
+    with col_metric2:
+        st.metric("⭐ Лучший результат", f"{max_score}/10")
+    with col_metric3:
+        st.metric("📈 Вопросов пройдено", f"{data['questions_count']}")
+    with col_metric4:
+        success_rate = (avg_score / 10) * 100
+        st.metric("📊 Успеваемость", f"{success_rate:.0f}%")
+    
+    # Дополнительная строка метрик
+    col_metric5, col_metric6, col_metric7, col_metric8 = st.columns(4)
+    with col_metric5:
+        st.metric("📉 Худший результат", f"{min_score}/10")
+    with col_metric6:
+        # Пустая колонка для симметрии
+        pass
+    with col_metric7:
+        # Пустая колонка для симметрии
+        pass
+    with col_metric8:
+        # Пустая колонка для симметрии
+        pass
+    
+    st.markdown("---")
+    
+    # Создаем колонки для графиков (компактная версия)
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # График оценок по критериям
+        if any(data['criteria'].values()):
+            st.markdown("**📈 Оценки по критериям**")
+            
+            criteria_names = {
+                'correctness': 'Правильность',
+                'completeness': 'Полнота',
+                'understanding': 'Понимание'
+            }
+            
+            # Создаем DataFrame для радиальной диаграммы
+            criteria_avg = {}
+            for criterion, scores in data['criteria'].items():
+                if scores:
+                    criteria_avg[criteria_names.get(criterion, criterion)] = sum(scores) / len(scores)
+            
+            if criteria_avg:
+                # Радиальная диаграмма (компактная)
+                categories = list(criteria_avg.keys())
+                values = list(criteria_avg.values())
+                
+                fig = go.Figure()
+                fig.add_trace(go.Scatterpolar(
+                    r=values,
+                    theta=categories,
+                    fill='toself',
+                    name='Результаты',
+                    line=dict(color='#4CAF50', width=3),
+                    fillcolor='rgba(76, 175, 80, 0.3)'
+                ))
+                
+                fig.update_layout(
+                    polar=dict(
+                        radialaxis=dict(
+                            visible=True,
+                            range=[0, 10],
+                            tickmode='linear',
+                            tick0=0,
+                            dtick=2
+                        )
+                    ),
+                    height=300,
+                    showlegend=False,
+                    margin=dict(l=20, r=20, t=20, b=20)
+                )
+                st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        # График динамики баллов
+        if data['scores']:
+            st.markdown("**📉 Динамика баллов**")
+            question_numbers = list(range(1, len(data['scores']) + 1))
+                    
+            fig = px.line(
+                x=question_numbers, 
+                y=data['scores'],
+                title="Баллы по вопросам",
+                labels={'x': 'Номер вопроса', 'y': 'Баллы'},
+                markers=True
+            )
+            fig.update_traces(
+                line=dict(color='#4CAF50', width=3),
+                marker=dict(size=8, color='#45a049')
+            )
+            fig.update_layout(
+                height=300, 
+                yaxis=dict(range=[0, 10]),
+                margin=dict(l=20, r=20, t=20, b=20)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    
+    st.markdown("---")
+    
+    # Создаем колонки для анализа сильных и слабых сторон
+    col_analysis1, col_analysis2 = st.columns(2)
+    
+    with col_analysis1:
+        # Анализ сильных сторон
+        if data['strengths']:
+            st.subheader("✅ Сильные стороны")
+            
+            # Создаем интерактивную визуализацию
+            strength_counts = {}
+            for item in data['strengths']:
+                # Простая группировка по ключевым словам
+                strength = item['strength'].lower()
+                if 'понимание' in strength or 'понимает' in strength:
+                    strength_counts['Понимание концепций'] = strength_counts.get('Понимание концепций', 0) + 1
+                elif 'правильн' in strength or 'корректн' in strength or 'точн' in strength:
+                    strength_counts['Правильность ответов'] = strength_counts.get('Правильность ответов', 0) + 1
+                elif 'объяснение' in strength or 'изложение' in strength:
+                    strength_counts['Качество объяснения'] = strength_counts.get('Качество объяснения', 0) + 1
+                else:
+                    strength_counts['Общие знания'] = strength_counts.get('Общие знания', 0) + 1
+            
+            if strength_counts:
+                # Горизонтальная гистограмма
+                categories = list(strength_counts.keys())
+                values = list(strength_counts.values())
+                
+                fig = px.bar(
+                    x=values,
+                    y=categories,
+                    orientation='h',
+                    title="Распределение сильных сторон",
+                    color=values,
+                    color_continuous_scale='Greens'
+                )
+                fig.update_layout(height=250, showlegend=False)
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Список сильных сторон (компактный)
+            for item in data['strengths'][:3]:  # Показываем только первые 3
+                with st.expander(f"🌟 {item['question']} (балл: {item['score']})"):
+                    st.write(item['strength'])
+            
+            if len(data['strengths']) > 3:
+                st.caption(f"И еще {len(data['strengths']) - 3} сильных сторон...")
+    
+    with col_analysis2:
+        # Анализ слабых сторон
+        if data['weaknesses']:
+            st.subheader("❌ Области для улучшения")
+            
+            # Группировка слабых сторон
+            weakness_counts = {}
+            for item in data['weaknesses']:
+                weakness = item['weakness'].lower()
+                if 'пример' in weakness or 'иллюстрац' in weakness:
+                    weakness_counts['Недостаток примеров'] = weakness_counts.get('Недостаток примеров', 0) + 1
+                elif 'детал' in weakness or 'подробн' in weakness:
+                    weakness_counts['Неполнота ответа'] = weakness_counts.get('Неполнота ответа', 0) + 1
+                elif 'объяснение' in weakness or 'изложение' in weakness:
+                    weakness_counts['Качество изложения'] = weakness_counts.get('Качество изложения', 0) + 1
+                else:
+                    weakness_counts['Прочие недочеты'] = weakness_counts.get('Прочие недочеты', 0) + 1
+            
+            if weakness_counts:
+                # Горизонтальная гистограмма
+                categories = list(weakness_counts.keys())
+                values = list(weakness_counts.values())
+                
+                fig = px.bar(
+                    x=values,
+                    y=categories,
+                    orientation='h',
+                    title="Распределение слабых сторон",
+                    color=values,
+                    color_continuous_scale='Reds'
+                )
+                fig.update_layout(height=250, showlegend=False)
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Список слабых сторон (компактный)
+            for item in data['weaknesses'][:3]:  # Показываем только первые 3
+                with st.expander(f"⚠️ {item['question']} (балл: {item['score']})"):
+                    st.write(item['weakness'])
+            
+            if len(data['weaknesses']) > 3:
+                st.caption(f"И еще {len(data['weaknesses']) - 3} областей для улучшения...")
+    
+    # Дополнительная секция с рекомендациями
+    st.markdown("---")
+    st.subheader("💡 Рекомендации для дальнейшего развития")
+    
+    if avg_score >= 8.5:
+        st.success("🏆 **Отличный результат!** Вы демонстрируете глубокое понимание темы. Рекомендуем перейти к более сложным темам или применить знания на практике.")
+    elif avg_score >= 7.0:
+        st.info("👍 **Хороший результат!** Основы освоены хорошо. Стоит поработать над деталями и добавить больше практических примеров.")
+    elif avg_score >= 5.0:
+        st.warning("📚 **Удовлетворительный результат.** Есть понимание основ, но нужна дополнительная практика и изучение материала.")
+    else:
+        st.error("💪 **Нужно больше практики!** Рекомендуем повторить основы темы и пройти диагностику еще раз.")
+
+def display_exam_details(exam_data, item):
+    """Отображение детальной информации о диагностике"""
+    if not exam_data:
+        st.error("Не удалось загрузить данные диагностики")
+        return
+    
+    # Убираем отдельный режим просмотра финального отчета - теперь он всегда показывается сверху
+    
+    # Заголовок страницы детального просмотра
+    st.markdown(f"""
+    <div style="
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1.5rem;
+        border-radius: 15px;
+        margin: 1rem 0;
+        color: white;
+    ">
+        <h1 style="margin: 0; color: white;">📋 Детали диагностики</h1>
+        <h3 style="margin: 0.5rem 0; color: white;">{exam_data.get('exam_config', {}).get('topic_info', {}).get('name', 'Неизвестная тема')}</h3>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Информация о сессии
+    session_info = exam_data.get('session_info', {})
+    exam_config = exam_data.get('exam_config', {})
+    statistics = exam_data.get('statistics', {})
+    
+    # Колонки для общей информации
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("👤 Студент", session_info.get('student_name', 'Неизвестно'))
+        try:
+            from datetime import datetime
+            start_time = datetime.fromisoformat(session_info.get('start_time', '').replace('Z', '+00:00'))
+            formatted_time = start_time.strftime("%d.%m.%Y %H:%M")
+            st.metric("📅 Дата и время", formatted_time)
+        except:
+            st.metric("📅 Дата и время", session_info.get('start_time', '')[:16])
+    
+    with col2:
+        topic_info = exam_config.get('topic_info', {})
+        difficulty = topic_info.get('difficulty', 'Неизвестно')
+        st.metric("🎯 Сложность", difficulty.capitalize())
+        exam_mode = "Структурированный" if exam_config.get('use_theme_structure', False) else "Быстрый"
+        st.metric("⚙️ Режим", exam_mode)
+    
+    with col3:
+        st.metric("❓ Вопросов", f"{statistics.get('total_questions', 0)}")
+        if statistics.get('average_score', 0) > 0:
+            st.metric("⭐ Средний балл", f"{statistics.get('average_score', 0):.1f}/10")
+        else:
+            st.metric("⭐ Средний балл", "Нет данных")
+    
+    st.markdown("---")
+    
+    # Показываем финальный отчет с визуализацией сразу после основной информации
+    final_report = exam_data.get('final_report', {})
+    questions_and_answers = exam_data.get('questions_and_answers', [])
+    has_evaluations = any(qa.get('evaluation') for qa in questions_and_answers)
+    
+    # Если есть данные для отчета, показываем его
+    if (final_report and final_report.get('report_data')) or has_evaluations:
+        # Создаем компактную версию финального отчета для встраивания
+        display_embedded_final_report(exam_data)
+        st.markdown("---")
+    
+    # Вопросы и ответы
+    
+    if not questions_and_answers:
+        st.warning("Вопросы и ответы не найдены в данной диагностике")
+        return
+    
+    st.subheader("❓ Вопросы и ответы")
+    
+    for i, qa_pair in enumerate(questions_and_answers, 1):
+        question_data = qa_pair.get('question', {})
+        answer_data = qa_pair.get('answer', {})
+        evaluation_data = qa_pair.get('evaluation', {})
+        
+        # Используем expander для каждого вопроса
+        with st.expander(f"Вопрос {i}: {question_data.get('question', 'Вопрос не найден')[:80]}...", expanded=(i == 1)):
+            
+            # Вопрос
+            st.markdown("### 📝 Вопрос")
+            st.write(question_data.get('question', 'Текст вопроса не найден'))
+            
+            # Дополнительная информация о вопросе
+            if question_data.get('topic_level'):
+                st.caption(f"**Уровень:** {question_data.get('topic_level')}")
+            
+            # Ответ
+            st.markdown("### 💬 Ответ студента")
+            if answer_data:
+                answer_content = answer_data.get('content', 'Ответ не найден')
+                if answer_content == "Ответ пропущен" or answer_content == "Ответ пропущен (время истекло)":
+                    st.warning(f"⏭️ {answer_content}")
+                else:
+                    st.write(answer_content)
+                
+                # Время ответа
+                if answer_data.get('response_time_seconds'):
+                    response_time = answer_data.get('response_time_seconds')
+                    minutes = int(response_time // 60)
+                    seconds = int(response_time % 60)
+                    st.caption(f"⏱️ Время ответа: {minutes}:{seconds:02d}")
+            else:
+                st.warning("Ответ не найден")
+            
+            # Оценка
+            st.markdown("### 📊 Оценка")
+            if evaluation_data:
+                # Общий балл
+                total_score = evaluation_data.get('total_score', 0)
+                st.metric("🎯 Общий балл", f"{total_score}/10")
+                
+                # Оценки по критериям
+                criteria_scores = evaluation_data.get('criteria_scores', {})
+                if criteria_scores:
+                    st.markdown("**📈 Оценки по критериям:**")
+                    criteria_cols = st.columns(len(criteria_scores))
+                    criteria_names = {
+                        'correctness': 'Правильность',
+                        'completeness': 'Полнота',
+                        'understanding': 'Понимание'
+                    }
+                    
+                    for idx, (criterion, score) in enumerate(criteria_scores.items()):
+                        with criteria_cols[idx]:
+                            criterion_name = criteria_names.get(criterion, criterion)
+                            st.metric(criterion_name, f"{score}/10")
+                
+                # Сильные стороны
+                if evaluation_data.get('strengths'):
+                    st.markdown("**✅ Сильные стороны:**")
+                    st.success(evaluation_data.get('strengths'))
+                
+                # Слабые стороны
+                if evaluation_data.get('weaknesses'):
+                    st.markdown("**❌ Области для улучшения:**")
+                    st.warning(evaluation_data.get('weaknesses'))
+                
+            else:
+                st.warning("Оценка не найдена")
+            
+            st.markdown("---")
+    
+    # Кнопка возврата
+    st.markdown("---")
+    col_back1, col_back2, col_back3 = st.columns([1, 2, 1])
+    with col_back2:
+        if st.button("🔙 Назад к списку диагностик", type="primary", use_container_width=True):
+            st.session_state['viewing_exam_details'] = False
+            st.session_state['selected_exam_filename'] = None
+            st.session_state['viewing_final_report'] = False
+            st.rerun()
 
 def display_exam_history():
     """Отображение истории диагностик в sidebar"""
@@ -492,14 +930,13 @@ def display_exam_history():
     display_history = history[:max_display]
     
     for item in display_history:
-        # Определяем цвет статуса
-        status_color = {
-            'completed': '🟢',
-            'in_progress': '🟡', 
-            'reset': '🔄',
-            'unknown': '⚪'
-        }
-        status_emoji = status_color.get(item['status'], '⚪')
+        # Определяем индикатор на основе данных
+        if item['questions_count'] > 0 and item['average_score'] > 0:
+            status_emoji = '🟢'  # Завершено с результатами
+        elif item['questions_count'] > 0:
+            status_emoji = '🟡'  # Есть вопросы, но нет оценок
+        else:
+            status_emoji = '⚪'  # Начато, но мало данных
         
         # Форматируем время
         try:
@@ -511,15 +948,17 @@ def display_exam_history():
         
         with st.sidebar.expander(f"{status_emoji} {item['topic_name'][:20]}... ({time_str})"):
             st.write(f"**Студент:** {item['student_name']}")
-            st.write(f"**Статус:** {item['status']}")
             st.write(f"**Вопросов:** {item['questions_count']}")
             if item['average_score'] > 0:
                 st.write(f"**Средний балл:** {item['average_score']:.1f}")
-            st.write(f"**Агенты:** {item['agent_type']}")
             
-            # Кнопка для просмотра детального лога (если понадобится в будущем)
+            # Кнопка для просмотра детального лога
             if st.button("📄 Подробнее", key=f"detail_{item['session_id']}", help="Просмотр детального лога"):
-                st.info("Функция просмотра детального лога будет добавлена позже")
+                # Устанавливаем состояние для просмотра деталей
+                st.session_state['viewing_exam_details'] = True
+                st.session_state['selected_exam_filename'] = item['filename']
+                st.session_state['viewing_final_report'] = False  # Сбрасываем при переходе
+                st.rerun()
     
     if len(history) > max_display:
         st.sidebar.caption(f"Показано {max_display} из {len(history)} записей")
@@ -572,7 +1011,7 @@ def setup_exam_on_main():
         # Выбор из предопределенных тем
             topics = topic_manager.get_predefined_topics()
         
-            topic_options = {f"{topic['name']} ({topic['subject']})": key 
+            topic_options = {f"{topic['name']}": key 
                             for key, topic in topics.items()}
             
             selected_topic_display = st.selectbox(
@@ -589,7 +1028,6 @@ def setup_exam_on_main():
                 'type': 'predefined',
                 'key': selected_topic_key,
                 'name': raw_topic['name'],
-                'subject': raw_topic['subject'],
                 'description': raw_topic['description'],
                 'difficulty': 'средний',  # Установим по умолчанию
                 'key_concepts': []
@@ -615,7 +1053,6 @@ def setup_exam_on_main():
                 'type': 'custom',
                 'key': 'custom',
                 'name': custom_name if custom_name.strip() else "Пользовательская тема",
-                'subject': "Общие знания",
                 'description': custom_description if custom_description.strip() else f"Экзамен по теме: {custom_name if custom_name.strip() else 'Пользовательская тема'}",
                 'difficulty': 'средний',
                 'key_concepts': []
@@ -1156,7 +1593,7 @@ def display_progress_header():
 
 
 def extract_evaluation_data():
-    """Извлечение данных оценок для визуализации"""
+    """Извлечение данных оценок для визуализации из текущей сессии"""
     if not st.session_state.orchestrator or not hasattr(st.session_state.orchestrator, 'current_session'):
         return None
     
@@ -1206,15 +1643,79 @@ def extract_evaluation_data():
         'questions_count': len(session.evaluations)
     }
 
-def display_results_visualization():
+def extract_historical_evaluation_data(exam_data):
+    """Извлечение данных оценок для визуализации из сохраненных логов"""
+    if not exam_data:
+        return None
+    
+    questions_and_answers = exam_data.get('questions_and_answers', [])
+    if not questions_and_answers:
+        return None
+    
+    # Собираем данные из оценок
+    strengths_data = []
+    weaknesses_data = []
+    criteria_data = {'correctness': [], 'completeness': [], 'understanding': []}
+    scores = []
+    
+    for i, qa_pair in enumerate(questions_and_answers, 1):
+        evaluation_data = qa_pair.get('evaluation', {})
+        if not evaluation_data:
+            continue
+            
+        # Баллы
+        total_score = evaluation_data.get('total_score', 0)
+        scores.append(total_score)
+        
+        # Оценки по критериям
+        criteria_scores = evaluation_data.get('criteria_scores', {})
+        for criterion, score in criteria_scores.items():
+            if criterion in criteria_data:
+                criteria_data[criterion].append(score)
+        
+        # Сильные стороны
+        strengths = evaluation_data.get('strengths', '')
+        if strengths:
+            strengths_data.append({
+                'question': f"Вопрос {i}",
+                'strength': strengths,
+                'score': total_score
+            })
+        
+        # Слабые стороны
+        weaknesses = evaluation_data.get('weaknesses', '')
+        if weaknesses:
+            weaknesses_data.append({
+                'question': f"Вопрос {i}",
+                'weakness': weaknesses,
+                'score': total_score
+            })
+    
+    return {
+        'strengths': strengths_data,
+        'weaknesses': weaknesses_data,
+        'criteria': criteria_data,
+        'scores': scores,
+        'questions_count': len([qa for qa in questions_and_answers if qa.get('evaluation')])
+    }
+
+def display_results_visualization(exam_data=None):
     """Отображение визуализации результатов завершенной диагностики"""
-    data = extract_evaluation_data()
+    # Если переданы исторические данные, используем их, иначе берем из текущей сессии
+    if exam_data:
+        data = extract_historical_evaluation_data(exam_data)
+        title_text = "📊 Анализ результатов диагностики"
+    else:
+        data = extract_evaluation_data()
+        title_text = "📊 Анализ ваших результатов"
+    
     if not data or data['questions_count'] == 0:
         st.warning("📊 Данные для визуализации недоступны")
         return
     
-    # Красивый заголовок с результатами
-    st.markdown("""
+    # Красивый заголовок с результатами  
+    header_title = "🎉 Диагностика завершена!" if not exam_data else "📊 Результаты диагностики"
+    st.markdown(f"""
     <div style="
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         padding: 1.5rem;
@@ -1223,8 +1724,8 @@ def display_results_visualization():
         color: white;
         text-align: center;
     ">
-        <h1 style="margin: 0; color: white;">🎉 Диагностика завершена!</h1>
-        <h3 style="margin: 0.5rem 0; color: white;">📊 Анализ ваших результатов</h3>
+        <h1 style="margin: 0; color: white;">{header_title}</h1>
+        <h3 style="margin: 0.5rem 0; color: white;">{title_text}</h3>
     </div>
     """, unsafe_allow_html=True)
     
@@ -1408,35 +1909,62 @@ def display_results_visualization():
     else:
         st.error("💪 **Нужно больше практики!** Рекомендуем повторить основы темы и пройти диагностику еще раз.")
     
-    # Кнопки действий
-    col_action1, col_action2, col_action3 = st.columns(3)
-    with col_action1:
-        if st.button("🔄 Пройти диагностику заново", type="secondary", use_container_width=True):
-            # Завершаем текущую сессию логирования
-            if st.session_state.dialog_logger:
-                st.session_state.dialog_logger.end_session("restart")
-            
-            # Сброс состояния
-            keys_to_keep = ['student_name']
-            for key in list(st.session_state.keys()):
-                if key not in keys_to_keep:
-                    del st.session_state[key]
-            initialize_session_state()
-            st.rerun()
-    
-    with col_action2:
-        if st.button("📄 Посмотреть историю", type="secondary", use_container_width=True):
-            st.info("💡 История диагностик доступна в левой боковой панели")
-    
-    with col_action3:
-        if st.button("📊 Скрыть анализ", type="secondary", use_container_width=True):
-            st.session_state['hide_visualization'] = True
-            st.rerun()
+    # Кнопки действий - адаптируем для исторических данных
+    if exam_data:
+        # Для исторических данных - только кнопка возврата
+        col_back_vis = st.columns([1, 2, 1])[1]
+        with col_back_vis:
+            if st.button("🔙 Назад к деталям диагностики", type="primary", use_container_width=True):
+                # Просто обновляем страницу - состояние просмотра деталей уже установлено
+                st.rerun()
+    else:
+        # Для текущей сессии - обычные кнопки
+        col_action1, col_action2, col_action3 = st.columns(3)
+        with col_action1:
+            if st.button("🔄 Пройти диагностику заново", type="secondary", use_container_width=True):
+                # Завершаем текущую сессию логирования
+                if st.session_state.dialog_logger:
+                    st.session_state.dialog_logger.end_session("restart")
+                
+                # Сброс состояния
+                keys_to_keep = ['student_name']
+                for key in list(st.session_state.keys()):
+                    if key not in keys_to_keep:
+                        del st.session_state[key]
+                initialize_session_state()
+                st.rerun()
+        
+        with col_action2:
+            if st.button("📄 Посмотреть историю", type="secondary", use_container_width=True):
+                st.info("💡 История диагностик доступна в левой боковой панели")
+        
+        with col_action3:
+            if st.button("📊 Скрыть анализ", type="secondary", use_container_width=True):
+                st.session_state['hide_visualization'] = True
+                st.rerun()
 
 
 def main():
     """Основная функция приложения"""
     initialize_session_state()
+    
+    # Если просматриваем детали диагностики, показываем их
+    if st.session_state.get('viewing_exam_details', False) and st.session_state.get('selected_exam_filename'):
+        # История диагностик в sidebar (показываем всегда)
+        display_exam_history()
+        
+        exam_data = load_exam_details(st.session_state.selected_exam_filename)
+        if exam_data:
+            # Найдем информацию о диагностике для передачи в функцию отображения
+            history = load_exam_history()
+            item = None
+            for hist_item in history:
+                if hist_item['filename'] == st.session_state.selected_exam_filename:
+                    item = hist_item
+                    break
+            
+            display_exam_details(exam_data, item)
+            return  # Завершаем выполнение функции, чтобы не показывать основной интерфейс
     
     # Проверяем таймер в самом начале для автообновления
     if (st.session_state.waiting_for_answer and 
@@ -1519,10 +2047,18 @@ def main():
         - ✏️ Собственные темы экзаменов
         - 🗂️ Тематическая структура по Блуму
         - 📈 Аналитика в реальном времени
+        - 📚 Просмотр истории всех диагностик
+        - 📄 Детальный анализ каждой диагностики
         
         **Способы выбора темы:**
         - **Готовые темы** - выберите из предустановленных тем
         - **Своя тема** - создайте экзамен по любой теме
+        
+        **Просмотр истории диагностик:**
+        - 📚 В левой панели отображается история всех пройденных диагностик
+        - 📄 Нажмите "Подробнее" для просмотра результатов, вопросов и ответов
+        - 📊 Финальный отчет с графиками отображается автоматически сверху
+        - 🔙 Кнопка "Назад к списку диагностик" для возврата к истории
         
         Настройте параметры диагностики выше и нажмите "Начать диагностику"!
         """)
