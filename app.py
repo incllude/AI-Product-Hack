@@ -306,7 +306,7 @@ def initialize_session_state():
         st.session_state.question_timer_start = None
     
     if 'answer_time_limit' not in st.session_state:
-        st.session_state.answer_time_limit = 60  # 60 секунд по умолчанию
+        st.session_state.answer_time_limit = 60  # 60 секунд по умолчанию (1 минута)
     
     if 'timer_expired' not in st.session_state:
         st.session_state.timer_expired = False
@@ -638,7 +638,8 @@ def setup_exam_on_main():
         use_theme_structure = st.checkbox("Использовать структуру по Блуму", False)
         
         # Настройка времени на ответ
-        answer_time_limit = st.slider("Время на ответ (секунды)", 30, 300, 60, step=15)
+        answer_time_minutes = st.slider("Время на ответ (минуты)", 1, 5, 1, step=1)
+        answer_time_limit = answer_time_minutes * 60  # Конвертируем в секунды
         st.session_state.answer_time_limit = answer_time_limit
         
     
