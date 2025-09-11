@@ -551,6 +551,7 @@ def setup_exam_on_main():
         
         max_questions = st.slider("Количество вопросов", 3, 10, 5)
         use_theme_structure = st.checkbox("Использовать структуру по Блуму", False)
+        
     
     # Проверка готовности к началу экзамена
     can_start_exam = True
@@ -696,10 +697,14 @@ def get_next_question():
     except Exception as e:
         st.error(f"Ошибка при получении вопроса: {str(e)}")
 
+
 def submit_answer(answer):
     """Отправка ответа на оценку"""
     if not st.session_state.orchestrator or not st.session_state.current_question:
         return
+    
+    # Сбрасываем состояние ожидания ответа
+    st.session_state.waiting_for_answer = False
     
     # Добавляем ответ пользователя в чат
     add_message("user", answer)
@@ -919,34 +924,6 @@ def display_progress_header():
             flex: 1;
         }}
         
-        .restart-button {{
-            background: linear-gradient(135deg, #ff6b6b, #ee5a52);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            box-shadow: 0 2px 8px rgba(255, 107, 107, 0.3);
-            transition: all 0.3s ease;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            white-space: nowrap;
-            text-decoration: none;
-        }}
-        
-        .restart-button:hover {{
-            background: linear-gradient(135deg, #ff5252, #d32f2f);
-            box-shadow: 0 4px 12px rgba(255, 107, 107, 0.4);
-            transform: translateY(-1px);
-        }}
-        
-        .restart-button:active {{
-            transform: translateY(0);
-            box-shadow: 0 2px 6px rgba(255, 107, 107, 0.3);
-        }}
         
         .progress-title {{
             margin: 0;
@@ -1038,11 +1015,6 @@ def display_progress_header():
             .main-title-with-progress {{
                 margin-top: 160px !important;
             }}
-            .restart-button {{
-                padding: 6px 12px;
-                font-size: 12px;
-                border-radius: 16px;
-            }}
             .progress-header {{
                 flex-direction: column;
                 gap: 8px;
@@ -1066,23 +1038,6 @@ def display_progress_header():
                         </span>
                     </div>
                 </div>
-                <button class="restart-button" onclick="
-                    setTimeout(() => {{
-                        const button = document.querySelector('button[key=\\"restart_progress\\"]');
-                        if (button) button.click();
-                        else {{
-                            const buttons = document.querySelectorAll('button');
-                            for (let btn of buttons) {{
-                                if (btn.textContent && btn.textContent.includes('Начать заново')) {{
-                                    btn.click();
-                                    break;
-                                }}
-                            }}
-                        }}
-                    }}, 100);
-                ">
-                    🔄 Начать заново
-                </button>
             </div>
             <div class="progress-bar-container">
                 <div class="progress-bar"></div>
@@ -1090,27 +1045,6 @@ def display_progress_header():
         </div>
         """, unsafe_allow_html=True)
         
-        # Скрытая кнопка для обработки нажатия из HTML кнопки (невидимая)
-        st.markdown("""
-        <style>
-        [data-testid="baseButton-secondary"][key="restart_progress"] {
-            display: none !important;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-        
-        if st.button("🔄 Начать заново", type="secondary", key="restart_progress", help="Завершить текущую диагностику и начать новую"):
-            # Завершаем текущую сессию логирования
-            if st.session_state.dialog_logger:
-                st.session_state.dialog_logger.end_session("reset")
-            
-            # Сброс состояния
-            keys_to_keep = ['student_name']
-            for key in list(st.session_state.keys()):
-                if key not in keys_to_keep:
-                    del st.session_state[key]
-            initialize_session_state()
-            st.rerun()
         
     except Exception as e:
         st.error(f"Ошибка при отображении прогресса: {str(e)}")
@@ -1412,7 +1346,28 @@ def main():
         <div class="main-title-with-progress">
         """, unsafe_allow_html=True)
         
-    st.title("🎓 Скользящая диагностика")
+    # Создаем колонки для заголовка и кнопки перезапуска (только во время экзамена)
+    if st.session_state.exam_started:
+        col_title, col_restart = st.columns([3, 1])
+        with col_title:
+            st.title("🎓 Скользящая диагностика")
+        with col_restart:
+            st.markdown("<br>", unsafe_allow_html=True)  # Добавляем отступ для выравнивания
+            if st.button("🔄 Начать заново", type="secondary", key="main_restart", help="Завершить текущую диагностику и начать новую"):
+                # Завершаем текущую сессию логирования
+                if st.session_state.dialog_logger:
+                    st.session_state.dialog_logger.end_session("reset")
+                
+                # Сброс состояния
+                keys_to_keep = ['student_name']
+                for key in list(st.session_state.keys()):
+                    if key not in keys_to_keep:
+                        del st.session_state[key]
+                initialize_session_state()
+                st.rerun()
+    else:
+        # Обычный заголовок когда экзамен не начат
+        st.title("🎓 Скользящая диагностика")
     
     if st.session_state.exam_started:
         st.markdown('</div>', unsafe_allow_html=True)

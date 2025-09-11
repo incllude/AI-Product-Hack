@@ -111,8 +111,7 @@ class TopicManager:
                         'key': selected_key,
                         'name': topic_info['name'],
                         'description': topic_info['description'],
-                        'difficulty': difficulty,
-                        'key_concepts': []
+                        'difficulty': difficulty
                     }
                 else:
                     print("Неверный номер. Попробуйте еще раз.")
@@ -152,8 +151,7 @@ class TopicManager:
             'name': name,
             'subject': subject,
             'description': description,
-            'difficulty': difficulty,
-            'key_concepts': []
+            'difficulty': difficulty
         }
     
     def _select_difficulty(self, available_levels: List[str]) -> str:
@@ -186,8 +184,7 @@ class TopicManager:
             'key': default_key,
             'name': topic_info['name'],
             'description': topic_info['description'],
-            'difficulty': "средний",
-            'key_concepts': []
+            'difficulty': "средний"
         }
     
     def get_topic_context_for_prompts(self, topic_info: Dict[str, any]) -> str:
