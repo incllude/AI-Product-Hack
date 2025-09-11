@@ -124,7 +124,7 @@ class DialogLogger:
         self.dialog_data["statistics"]["total_questions"] += 1
         self._save_log()
     
-    def log_answer_and_evaluation(self, answer, evaluation_data):
+    def log_answer_and_evaluation(self, answer, evaluation_data, response_time=None):
         """Логирование ответа и его оценки"""
         if not self.dialog_data or not self.dialog_data["questions_and_answers"]:
             return
@@ -134,7 +134,8 @@ class DialogLogger:
             if qa_pair["answer"] is None:
                 qa_pair["answer"] = {
                     "timestamp": datetime.now().isoformat(),
-                    "content": answer
+                    "content": answer,
+                    "response_time_seconds": response_time
                 }
                 
                 # Адаптируем структуру оценки
@@ -299,6 +300,22 @@ def initialize_session_state():
     
     if 'final_report_generated' not in st.session_state:
         st.session_state.final_report_generated = False
+    
+    # Таймер для ответов
+    if 'question_timer_start' not in st.session_state:
+        st.session_state.question_timer_start = None
+    
+    if 'answer_time_limit' not in st.session_state:
+        st.session_state.answer_time_limit = 60  # 60 секунд по умолчанию
+    
+    if 'timer_expired' not in st.session_state:
+        st.session_state.timer_expired = False
+    
+    if 'last_timer_update' not in st.session_state:
+        st.session_state.last_timer_update = 0
+    
+    if 'auto_skip_triggered' not in st.session_state:
+        st.session_state.auto_skip_triggered = False
 
 def add_message(role, content, message_type="text", metadata=None):
     """Добавление сообщения в чат"""
@@ -314,6 +331,74 @@ def add_message(role, content, message_type="text", metadata=None):
     # Логирование сообщения
     if st.session_state.dialog_logger:
         st.session_state.dialog_logger.log_message(role, content, message_type, metadata)
+
+def check_timer_expiry():
+    """Проверка истечения времени для ответа"""
+    if (st.session_state.waiting_for_answer and 
+        st.session_state.question_timer_start is not None and 
+        not st.session_state.timer_expired):
+        
+        elapsed_time = time.time() - st.session_state.question_timer_start
+        if elapsed_time >= st.session_state.answer_time_limit:
+            st.session_state.timer_expired = True
+            return True
+    return False
+
+def get_remaining_time():
+    """Получение оставшегося времени в секундах"""
+    if (st.session_state.waiting_for_answer and 
+        st.session_state.question_timer_start is not None and 
+        not st.session_state.timer_expired):
+        
+        elapsed_time = time.time() - st.session_state.question_timer_start
+        remaining_time = max(0, st.session_state.answer_time_limit - elapsed_time)
+        return remaining_time
+    return 0
+
+def display_timer():
+    """Отображение таймера обратного отсчета"""
+    if (st.session_state.waiting_for_answer and 
+        st.session_state.question_timer_start is not None and 
+        not st.session_state.timer_expired):
+        
+        remaining_time = get_remaining_time()
+        
+        if remaining_time > 0:
+            minutes = int(remaining_time // 60)
+            seconds = int(remaining_time % 60)
+            
+            # Определяем цвет в зависимости от оставшегося времени
+            if remaining_time > 30:
+                color = "#4CAF50"  # Зеленый
+            elif remaining_time > 10:
+                color = "#FF9800"  # Оранжевый
+            else:
+                color = "#f44336"  # Красный
+            
+            # HTML для красивого таймера
+            timer_html = f"""
+            <div style="
+                background: linear-gradient(135deg, {color} 0%, {color}dd 100%);
+                color: white;
+                padding: 15px 20px;
+                border-radius: 15px;
+                text-align: center;
+                margin: 10px 0;
+                box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+                font-size: 18px;
+                font-weight: bold;
+            ">
+                ⏱️ Осталось времени: {minutes:02d}:{seconds:02d}
+            </div>
+            """
+            st.markdown(timer_html, unsafe_allow_html=True)
+            
+            # Если время истекло, показываем предупреждение
+            if remaining_time <= 5:
+                st.warning("⚠️ Время почти истекло! Поторопитесь с ответом!")
+            
+        else:
+            st.error("⏰ Время истекло! Вопрос будет автоматически пропущен.")
 
 def display_chat_messages():
     """Отображение истории чата"""
@@ -552,6 +637,10 @@ def setup_exam_on_main():
         max_questions = st.slider("Количество вопросов", 3, 10, 5)
         use_theme_structure = st.checkbox("Использовать структуру по Блуму", False)
         
+        # Настройка времени на ответ
+        answer_time_limit = st.slider("Время на ответ (секунды)", 30, 300, 60, step=15)
+        st.session_state.answer_time_limit = answer_time_limit
+        
     
     # Проверка готовности к началу экзамена
     can_start_exam = True
@@ -673,6 +762,12 @@ def get_next_question():
             st.session_state.current_question = question_data
             st.session_state.waiting_for_answer = True
             
+            # Запуск таймера для ответа
+            st.session_state.question_timer_start = time.time()
+            st.session_state.timer_expired = False
+            st.session_state.last_timer_update = 0  # Сбрасываем время последнего обновления
+            st.session_state.auto_skip_triggered = False  # Сбрасываем флаг автопропуска
+            
             # Логирование вопроса
             if st.session_state.dialog_logger:
                 st.session_state.dialog_logger.log_question(question_data)
@@ -703,8 +798,12 @@ def submit_answer(answer):
     if not st.session_state.orchestrator or not st.session_state.current_question:
         return
     
-    # Сбрасываем состояние ожидания ответа
+    # Сбрасываем состояние ожидания ответа и таймер
     st.session_state.waiting_for_answer = False
+    st.session_state.question_timer_start = None
+    st.session_state.timer_expired = False
+    st.session_state.last_timer_update = 0
+    st.session_state.auto_skip_triggered = False
     
     # Добавляем ответ пользователя в чат
     add_message("user", answer)
@@ -715,9 +814,14 @@ def submit_answer(answer):
             # Отправляем ответ на оценку
             evaluation = st.session_state.orchestrator.submit_answer(answer)
             
+            # Вычисляем время ответа
+            response_time = None
+            if st.session_state.question_timer_start:
+                response_time = time.time() - st.session_state.question_timer_start
+            
             # Логирование ответа и оценки
             if st.session_state.dialog_logger:
-                st.session_state.dialog_logger.log_answer_and_evaluation(answer, evaluation)
+                st.session_state.dialog_logger.log_answer_and_evaluation(answer, evaluation, response_time)
             
             # Форматирование результата оценки
             eval_text = f"""**Оценка: {evaluation.get('total_score', 0)}/10 баллов**"""
@@ -1333,6 +1437,17 @@ def main():
     """Основная функция приложения"""
     initialize_session_state()
     
+    # Проверяем таймер в самом начале для автообновления
+    if (st.session_state.waiting_for_answer and 
+        not st.session_state.timer_expired and 
+        st.session_state.question_timer_start is not None):
+        
+        # Если время истекло, имитируем нажатие кнопки "Пропустить"
+        if check_timer_expiry():
+            add_message("assistant", "⏰ Время на ответ истекло! Вопрос автоматически пропущен.")
+            st.session_state.auto_skip_triggered = True
+            st.rerun()
+    
     # Заголовок с отступом если экзамен активен
     if st.session_state.exam_started:
         # Добавляем отступ сверху для заголовка, чтобы он не перекрывался с фиксированным прогресс-баром
@@ -1399,6 +1514,7 @@ def main():
         
         **Возможности:**
         - 🎯 Адаптивные вопросы
+        - ⏱️ Ограничение времени на ответ
         - ✏️ Собственные темы экзаменов
         - 🗂️ Тематическая структура по Блуму
         - 📈 Аналитика в реальном времени
@@ -1429,6 +1545,16 @@ def main():
         
         # Поле ввода ответа
         elif st.session_state.waiting_for_answer and not st.session_state.exam_completed:
+            # Проверяем истечение времени (дублирующая проверка для надежности)
+            if check_timer_expiry():
+                # Время истекло - устанавливаем флаг автопропуска
+                add_message("assistant", "⏰ Время на ответ истекло! Вопрос автоматически пропущен.")
+                st.session_state.auto_skip_triggered = True
+                st.rerun()
+            
+            # Отображаем таймер
+            display_timer()
+            
             with st.form("answer_form", clear_on_submit=True):
                 user_answer = st.text_area(
                     "Ваш ответ:",
@@ -1442,7 +1568,12 @@ def main():
                 with col2:
                     skip_button = st.form_submit_button("⏭️ Пропустить")
                 
-                if submit_button and user_answer.strip():
+                # Проверяем автоматический пропуск или нажатие кнопок
+                if st.session_state.get('auto_skip_triggered', False):
+                    # Автоматический пропуск - имитируем нажатие кнопки "Пропустить"
+                    st.session_state.auto_skip_triggered = False
+                    submit_answer("Ответ пропущен (время истекло)")
+                elif submit_button and user_answer.strip():
                     submit_answer(user_answer.strip())
                 elif skip_button:
                     submit_answer("Ответ пропущен")
@@ -1463,6 +1594,16 @@ def main():
     
         st.markdown('</div>', unsafe_allow_html=True)  # Закрываем div для отступа
     
+    # Автообновление для таймера - принудительное обновление
+    if (st.session_state.waiting_for_answer and 
+        not st.session_state.timer_expired and 
+        st.session_state.question_timer_start is not None):
+        
+        remaining_time = get_remaining_time()
+        if remaining_time > 0:
+            # Принудительное обновление каждые 2 секунды
+            time.sleep(2)
+            st.rerun()
 
 if __name__ == "__main__":
     main()
